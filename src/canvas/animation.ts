@@ -31,10 +31,14 @@ export interface WalkPoseState {
   facing: 1 | -1;
   strideBob: number;
   strideTilt: number;
+  breathPhase: number; // 0..1 inhale-exhale curve
+  breathScaleX: number;
+  breathScaleY: number;
 }
 
 /**
- * Computes workshop character walk state, facing direction, and stride bounce.
+ * Computes workshop character walk state, facing direction, stride bounce,
+ * and subtle chest-breathing kinematics when standing idle.
  * Uses a 2.5px arrival deadzone to prevent jitter when standing at a station.
  */
 export function computeWalkPose(
@@ -47,11 +51,17 @@ export function computeWalkPose(
   const isWalking = Math.abs(dx) > 2.5;
   const facing: 1 | -1 = isWalking ? (dx >= 0 ? 1 : -1) : lastFacing;
   if (!isWalking) {
+    // Organic ~2.4s breath cycle: gentle chest expansion & shoulder rise anchored at boots
+    const breathPhase = Math.pow(0.5 + 0.5 * Math.sin(time * 2.6), 1.35);
+    const weightShift = Math.sin(time * 1.45) * 0.014;
     return {
       isWalking: false,
       facing,
-      strideBob: Math.round(Math.sin(time * 3.2) * 0.8),
-      strideTilt: 0,
+      strideBob: 0,
+      strideTilt: weightShift,
+      breathPhase,
+      breathScaleX: 1 + breathPhase * 0.018,
+      breathScaleY: 1 + breathPhase * 0.032,
     };
   }
   const cycle = Math.sin(time * 18);
@@ -60,6 +70,97 @@ export function computeWalkPose(
     facing,
     strideBob: -Math.abs(Math.round(cycle * 2.5)),
     strideTilt: cycle * 0.055,
+    breathPhase: 0,
+    breathScaleX: 1,
+    breathScaleY: 1,
+  };
+}
+
+export type WorkshopIdleBehavior = 'breathe' | 'station_work' | 'hammer_heft' | 'glance';
+
+export interface WorkshopIdlePose {
+  behavior: WorkshopIdleBehavior;
+  action: 'idle' | 'bellows' | 'strike' | 'tend';
+  frame: number;
+  facing: 1 | -1;
+  extraTilt: number;
+}
+
+/**
+ * Computes a multi-beat Workshop idle routine while waiting for station input:
+ * calm chest breathing, periodic station tending, hammer readiness shift, and
+ * glancing toward waiting customers.
+ */
+export function computeWorkshopIdlePose(
+  time: number,
+  activeSpot: string,
+  ordersCount: number,
+  lastFacing: 1 | -1,
+  activeX: number,
+): WorkshopIdlePose {
+  const safeT = Math.max(0, time);
+  const cycle = safeT % 13.5;
+
+  // 0.0 .. 1.9s: Periodic station craft gesture (stoking hearth, hammer tap, or tool check)
+  if (cycle < 1.9) {
+    if (activeSpot === 'furnace') {
+      return {
+        behavior: 'station_work',
+        action: 'bellows',
+        frame: Math.floor(safeT * 6) % 3,
+        facing: 1,
+        extraTilt: 0,
+      };
+    }
+    if (activeSpot === 'anvil') {
+      return {
+        behavior: 'station_work',
+        action: 'strike',
+        frame: Math.floor(safeT * 6.5) % 4,
+        facing: 1,
+        extraTilt: 0,
+      };
+    }
+    return {
+      behavior: 'station_work',
+      action: 'tend',
+      frame: Math.floor(safeT * 4.5) % 3,
+      facing: lastFacing,
+      extraTilt: 0,
+    };
+  }
+
+  // 5.2 .. 6.7s: Subtle hammer-heft / posture adjustment
+  if (cycle >= 5.2 && cycle < 6.7) {
+    const sub = (cycle - 5.2) / 1.5;
+    return {
+      behavior: 'hammer_heft',
+      action: sub < 0.72 ? 'tend' : 'idle',
+      frame: sub < 0.36 ? 0 : 1,
+      facing: lastFacing,
+      extraTilt: Math.sin(sub * Math.PI) * 0.028 * lastFacing,
+    };
+  }
+
+  // 9.8 .. 11.4s: Glance toward waiting patron at the counter (or survey the workshop)
+  if (cycle >= 9.8 && cycle < 11.4) {
+    const glanceFacing: 1 | -1 =
+      ordersCount > 0 ? (activeX > 205 ? -1 : 1) : lastFacing === 1 ? -1 : 1;
+    return {
+      behavior: 'glance',
+      action: 'idle',
+      frame: 0,
+      facing: glanceFacing,
+      extraTilt: Math.sin(((cycle - 9.8) / 1.6) * Math.PI) * 0.018 * glanceFacing,
+    };
+  }
+
+  return {
+    behavior: 'breathe',
+    action: 'idle',
+    frame: 0,
+    facing: lastFacing,
+    extraTilt: 0,
   };
 }
 

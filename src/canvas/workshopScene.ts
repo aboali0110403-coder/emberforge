@@ -4,6 +4,7 @@ import { getPortraitAsset, getWorkshopBgAsset } from '../gfx/generatedAssets';
 import { ParticlePool } from '../gfx/particles';
 import { getPlayerSpriteCanvas } from '../gfx/sprites';
 import type { EquipmentId, Order, PlayerCustomization } from '../types';
+import { computeWorkshopIdlePose } from './animation';
 
 export type WorkshopHotspotId =
   | 'furnace'
@@ -54,6 +55,9 @@ export interface WorkshopRenderOptions {
   isWalking?: boolean;
   facing?: 1 | -1;
   strideBob?: number;
+  strideTilt?: number;
+  breathScaleX?: number;
+  breathScaleY?: number;
 }
 
 export function renderWorkshopScene(
@@ -276,13 +280,20 @@ export function renderWorkshopScene(
     ctx.textAlign = 'left';
   }
 
-  // Player Blacksmith walking or tending active station
+  // Player Blacksmith walking or subtle breathing & idle routine while waiting
   const isWalking = Boolean(opts.isWalking);
-  const facing: 1 | -1 = opts.facing ?? 1;
-  const strideBob = opts.strideBob ?? Math.round(Math.sin(time * 3.5) * 1);
+  const baseFacing: 1 | -1 = opts.facing ?? 1;
+  const strideBob = isWalking ? (opts.strideBob ?? 0) : 0;
+  const baseTilt = opts.strideTilt ?? (isWalking ? 0 : Math.sin(time * 1.45) * 0.014);
+  const fallbackBreath = Math.pow(0.5 + 0.5 * Math.sin(time * 2.6), 1.35);
+  const breathScaleX = isWalking ? 1 : (opts.breathScaleX ?? 1 + fallbackBreath * 0.018);
+  const breathScaleY = isWalking ? 1 : (opts.breathScaleY ?? 1 + fallbackBreath * 0.032);
 
   let charAction: 'idle' | 'walk' | 'bellows' | 'strike' | 'tend' = 'idle';
   let charFrame = 0;
+  let charFacing: 1 | -1 = baseFacing;
+  let extraTilt = 0;
+
   if (isWalking) {
     charAction = 'walk';
     charFrame = Math.floor(time * 9) % 2;
@@ -290,7 +301,7 @@ export function renderWorkshopScene(
       particles.spawn(
         activeCharX + 26,
         218,
-        -facing * (10 + Math.random() * 14),
+        -charFacing * (10 + Math.random() * 14),
         -4 - Math.random() * 6,
         0.35,
         2,
@@ -300,20 +311,26 @@ export function renderWorkshopScene(
       );
     }
   } else {
-    // Periodic living craft gesture while standing at a workshop station
-    const cycle = time % 5.2;
-    if (cycle < 1.35) {
-      const spot = opts.activeSpot ?? 'anvil';
-      if (spot === 'furnace') {
-        charAction = 'bellows';
-        charFrame = Math.floor(time * 6) % 3;
-      } else if (spot === 'anvil') {
-        charAction = 'strike';
-        charFrame = Math.floor(time * 7) % 4;
-      } else if (spot === 'grindstone' || spot === 'quench' || spot === 'workbench') {
-        charAction = 'tend';
-        charFrame = Math.floor(time * 5) % 3;
-      }
+    const idlePose = computeWorkshopIdlePose(
+      time,
+      opts.activeSpot ?? 'anvil',
+      orders.length,
+      baseFacing,
+      activeCharX,
+    );
+    charAction = idlePose.action;
+    charFrame = idlePose.frame;
+    charFacing = idlePose.facing;
+    extraTilt = idlePose.extraTilt;
+
+    if (
+      hasRichBg &&
+      idlePose.behavior === 'station_work' &&
+      (opts.activeSpot ?? 'anvil') === 'anvil' &&
+      charFrame === 3 &&
+      Math.random() < 0.22
+    ) {
+      particles.burstSparks(activeCharX + 58, 170, 2, '#fde047');
     }
   }
 
@@ -322,15 +339,29 @@ export function renderWorkshopScene(
     charAction === 'strike',
     charAction,
     charFrame,
-    facing,
+    charFacing,
   );
   const px = Math.round(activeCharX);
-  const py = (hasRichBg ? 158 : 178) + strideBob;
+  const basePy = hasRichBg ? 158 : 178;
   const pw = hasRichBg ? 56 : 32;
   const ph = hasRichBg ? 64 : 32;
-  ctx.fillStyle = 'rgba(0,0,0,0.44)';
-  ctx.fillRect(px + 12, (hasRichBg ? 158 : 178) + ph - 5, pw - 24, 6);
-  ctx.drawImage(pSprite, px, py, pw, ph);
+  const footX = px + pw / 2;
+  const footY = basePy + ph - 3;
+
+  // Soft ground ellipse shadow anchored beneath boots
+  const shadowRx = Math.round((pw - 22) * 0.5 * (isWalking ? 0.92 : 1 - (breathScaleY - 1) * 0.6));
+  ctx.fillStyle = 'rgba(0,0,0,0.40)';
+  ctx.beginPath();
+  ctx.ellipse(footX, footY + 1, Math.max(8, shadowRx), 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bottom-pivoted draw so boots stay planted on the floor during breathing & sway
+  ctx.save();
+  ctx.translate(footX, footY + strideBob);
+  ctx.rotate(baseTilt + extraTilt);
+  ctx.scale(breathScaleX, breathScaleY);
+  ctx.drawImage(pSprite, -pw / 2, -ph + 3, pw, ph);
+  ctx.restore();
 
   // Corner-bracket reticle + tier tag on hovered station
   if (hoveredSpot) {

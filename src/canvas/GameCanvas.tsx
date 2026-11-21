@@ -341,6 +341,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             isWalking: walkPose.isWalking,
             facing: walkPose.facing,
             strideBob: walkPose.strideBob,
+            strideTilt: walkPose.strideTilt,
+            breathScaleX: walkPose.breathScaleX,
+            breathScaleY: walkPose.breathScaleY,
           },
         );
       }

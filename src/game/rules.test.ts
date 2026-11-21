@@ -47,6 +47,7 @@ import { ParticlePool } from '../gfx/particles';
 import {
   computeBattleTimeline,
   computeWalkPose,
+  computeWorkshopIdlePose,
   easeOutCubic,
   getWeaponHeatSpec,
 } from '../canvas/animation';
@@ -703,10 +704,30 @@ test('animation helpers compute deterministic walk poses, heat tiers, and battle
   const walkingRight = computeWalkPose(100, 140, -1, 0.25);
   assert.equal(walkingRight.isWalking, true);
   assert.equal(walkingRight.facing, 1);
+  assert.equal(walkingRight.breathScaleX, 1);
+  assert.equal(walkingRight.breathScaleY, 1);
 
-  const arrivedLeft = computeWalkPose(101, 100, -1, 0.25);
+  const arrivedLeft = computeWalkPose(101, 100, -1, 0.6);
   assert.equal(arrivedLeft.isWalking, false);
   assert.equal(arrivedLeft.facing, -1);
+  assert.ok(arrivedLeft.breathScaleX >= 1 && arrivedLeft.breathScaleX <= 1.025);
+  assert.ok(arrivedLeft.breathScaleY >= 1 && arrivedLeft.breathScaleY <= 1.04);
+
+  const idleWork = computeWorkshopIdlePose(0.5, 'anvil', 1, 1, 132);
+  assert.equal(idleWork.behavior, 'station_work');
+  assert.equal(idleWork.action, 'strike');
+
+  const idleBreathe = computeWorkshopIdlePose(3.0, 'anvil', 1, 1, 132);
+  assert.equal(idleBreathe.behavior, 'breathe');
+  assert.equal(idleBreathe.action, 'idle');
+
+  const idleHeft = computeWorkshopIdlePose(5.8, 'anvil', 1, 1, 132);
+  assert.equal(idleHeft.behavior, 'hammer_heft');
+  assert.equal(idleHeft.action, 'tend');
+
+  const idleGlance = computeWorkshopIdlePose(10.5, 'anvil', 1, -1, 132);
+  assert.equal(idleGlance.behavior, 'glance');
+  assert.equal(idleGlance.facing, 1);
 
   assert.equal(getWeaponHeatSpec(0.1).bucket, 'cold');
   assert.equal(getWeaponHeatSpec(0.3).bucket, 'warm');
