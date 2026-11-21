@@ -1,0 +1,6 @@
+{
+  "name": "Emberforge",
+  "description": "A 16-bit pixel-art blacksmithing game where you forge modular weapons for five fantasy kingdoms, master five tactile crafting stations, and earn renown across the realm.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
