@@ -1,3 +1,5 @@
+import { drawStationLayers } from '../gfx/stationLayers';
+import { ANVIL_IMPACT_AT, ANVIL_SWING_SECONDS, drawAnvilHammer, drawAnvilLayers } from '../gfx/anvilLayers';
 import { soundEngine } from '../audio/soundEngine';
 import { BALANCE } from '../data/balance';
 import { getEquipmentSheetSprite, getForgeUiSprite, getVfxSprite } from '../gfx/assetSheets';
@@ -21,6 +23,7 @@ import type {
   PlayerCustomization,
   StationId,
   WeaponInstance,
+  WeaponTypeId,
 } from '../types';
 import { easeOutCubic, getWeaponHeatSpec } from './animation';
 
@@ -64,6 +67,11 @@ export interface MinigameRuntime {
   ringSpeed: number;
   strikeScores: number[];
   hammerStrikeAnim: number;
+  anvilStrikeX: number;
+  anvilStrikeY: number;
+  anvilStrikeQuality: 'perfect' | 'good' | 'miss';
+  anvilImpactEmitted: boolean;
+  anvilTargetSpan: number;
   // Grindstone state
   cursorX: number; // 0..1
   zoneCenter: number;
@@ -93,6 +101,7 @@ export function createMinigameRuntime(
   station: StationId,
   weaponLevel: number,
   equipment: Record<EquipmentId, number>,
+  weaponType: WeaponTypeId = 'sword',
 ): MinigameRuntime {
   const diffScale = Math.min(1, (weaponLevel - 1) / 18);
   const fTier = equipment.furnace;
@@ -135,6 +144,12 @@ export function createMinigameRuntime(
     ringSpeed: 0.62 + diffScale * 0.30 - (hTier - 1) * 0.04,
     strikeScores: [],
     hammerStrikeAnim: 0,
+    anvilStrikeX: 240,
+    anvilStrikeY: 144,
+    anvilStrikeQuality: 'miss',
+    anvilImpactEmitted: false,
+    anvilTargetSpan: { sword: 110, dagger: 72, shield: 28, longbow: 94, staff: 100,
+      spear: 100, cleaver: 44, axe: 26, scythe: 68, trident: 70 }[weaponType],
     // Grindstone
     cursorX: 0.5,
     zoneCenter: 0.5,
@@ -171,8 +186,9 @@ export function createMinigameRuntime(
 }
 
 function spawnNextAnvilSpot(rt: MinigameRuntime): void {
-  rt.targetX = 185 + Math.random() * 110;
-  rt.targetY = 128 + Math.random() * 34;
+  rt.targetX = 240 + (Math.random() - 0.5) * rt.anvilTargetSpan;
+  // Keep every target on the blade's broad working edge.
+  rt.targetY = 121 + Math.random() * 8;
   rt.ringProgress = 0;
 }
 
@@ -216,9 +232,9 @@ export function handleMinigamePointerDown(
     if (!rt.submerged) {
       rt.submerged = true;
       soundEngine.playQuenchHiss();
-      particles.burstSplash(240, 152, 14);
-      particles.burstSteam(240, 154, 12);
-      particles.spawnRing(240, 156, 26, '#7dd3fc');
+      particles.burstSplash(186, 152, 14);
+      particles.burstSteam(186, 154, 12);
+      particles.spawnRing(186, 156, 26, '#7dd3fc');
     }
   } else if (rt.station === 'workbench') {
     if (rt.wbPhase === 'fit') {
@@ -295,7 +311,11 @@ function triggerAnvilStrike(
   particles: ParticlePool,
   cb: MinigameCallbacks,
 ): void {
-  rt.hammerStrikeAnim = 0.24;
+  if (rt.hammerStrikeAnim > 0 || rt.strikesDone >= rt.strikesTotal) return;
+  rt.hammerStrikeAnim = ANVIL_SWING_SECONDS;
+  rt.anvilStrikeX = rt.targetX;
+  rt.anvilStrikeY = rt.targetY;
+  rt.anvilImpactEmitted = false;
   const targetAt = 0.85;
   const dist = Math.abs(rt.ringProgress - targetAt);
   const hammerBonus = (equipment.hammer - 1) * 0.02;
@@ -307,27 +327,18 @@ function triggerAnvilStrike(
     rt.bestStreak = Math.max(rt.bestStreak, rt.streak);
     const streakBonus = rt.streak >= 3 ? 0.04 : 0;
     score = Math.min(1.04, 1.0 + streakBonus);
-    soundEngine.playHammer('perfect');
-    particles.burstSparks(rt.targetX, rt.targetY, 22, '#fde047');
-    particles.spawnRing(rt.targetX, rt.targetY, 28, '#fde047');
+    rt.anvilStrikeQuality = 'perfect';
     triggerPopup(rt, 'perfect', rt.targetX, rt.targetY - 26);
-    cb.onHitStop(0.045);
-    cb.onShake(4);
   } else if (dist <= 0.24 + hammerBonus + anvilForgive) {
     score = 0.76;
     rt.streak = 0;
-    soundEngine.playHammer('good');
-    particles.burstSparks(rt.targetX, rt.targetY, 12, '#fb923c');
-    particles.spawnRing(rt.targetX, rt.targetY, 20, '#fb923c');
+    rt.anvilStrikeQuality = 'good';
     triggerPopup(rt, 'good', rt.targetX, rt.targetY - 24);
-    cb.onHitStop(0.02);
-    cb.onShake(2);
   } else {
     score = 0.30 + (equipment.anvil - 1) * 0.05;
     rt.streak = 0;
-    soundEngine.playHammer('miss');
+    rt.anvilStrikeQuality = 'miss';
     triggerPopup(rt, 'miss', rt.targetX, rt.targetY - 22);
-    cb.onShake(1.5);
   }
 
   cb.onStreak(rt.streak);
@@ -338,11 +349,8 @@ function triggerAnvilStrike(
     rt.strikeScores.reduce((a, b) => a + b, 0) / rt.strikeScores.length,
   );
 
-  if (rt.strikesDone >= rt.strikesTotal) {
-    finishMinigame(rt, equipment, cb);
-  } else {
-    spawnNextAnvilSpot(rt);
-  }
+  // Advance the spot (or finish) after recovery, so the hammer and impact
+  // stay on the point that was actually struck, including the last strike.
 }
 
 function triggerWorkbenchBind(
@@ -408,25 +416,25 @@ function releaseQuench(
     rt.accuracy = 0.32;
     rt.statusBanner = { text: 'BRITTLE OVER-COOL!', color: '#f87171' };
     soundEngine.playWarningTone();
-    triggerPopup(rt, 'miss', 240, 108);
+    triggerPopup(rt, 'miss', 186, 108);
   } else if (dist <= half * 0.42) {
     rt.accuracy = 1.0;
     rt.streak += 1;
     rt.bestStreak = Math.max(rt.bestStreak, rt.streak);
     rt.statusBanner = { text: 'MASTER TEMPER!', color: '#fde047' };
     soundEngine.playLevelUp();
-    particles.burstSteam(240, 150, 24);
-    particles.spawnRing(240, 148, 34, '#fde047');
-    triggerPopup(rt, 'perfect', 240, 108);
+    particles.burstSteam(186, 150, 24);
+    particles.spawnRing(186, 148, 34, '#fde047');
+    triggerPopup(rt, 'perfect', 186, 108);
   } else if (dist <= half * 1.15) {
     rt.accuracy = 0.83;
     soundEngine.playQuenchHiss();
-    particles.burstSteam(240, 150, 14);
-    triggerPopup(rt, 'good', 240, 108);
+    particles.burstSteam(186, 150, 14);
+    triggerPopup(rt, 'good', 186, 108);
   } else {
     rt.accuracy = Math.max(0.34, 0.72 - dist);
     soundEngine.playWarningTone();
-    triggerPopup(rt, 'miss', 240, 108);
+    triggerPopup(rt, 'miss', 186, 108);
   }
   rt.finished = true;
   cb.onFinish({ accuracy: rt.accuracy, bestStreak: rt.bestStreak });
@@ -456,6 +464,26 @@ export function updateMinigame(
   rt.elapsed += dt;
   if (rt.hammerStrikeAnim > 0) {
     rt.hammerStrikeAnim = Math.max(0, rt.hammerStrikeAnim - dt);
+    if (rt.station === 'anvil') {
+      const swingTime = ANVIL_SWING_SECONDS - rt.hammerStrikeAnim;
+      if (!rt.anvilImpactEmitted && swingTime >= ANVIL_IMPACT_AT) {
+        rt.anvilImpactEmitted = true;
+        soundEngine.playHammer(rt.anvilStrikeQuality);
+        cb.onShake(rt.anvilStrikeQuality === 'perfect' ? 4 : rt.anvilStrikeQuality === 'good' ? 2 : 1.5);
+        if (rt.anvilStrikeQuality !== 'miss') {
+          cb.onHitStop(rt.anvilStrikeQuality === 'perfect' ? 0.045 : 0.02);
+          const perfect = rt.anvilStrikeQuality === 'perfect';
+          const color = perfect ? '#fde047' : '#fb923c';
+          particles.burstSparks(rt.anvilStrikeX, rt.anvilStrikeY, perfect ? 22 : 12, color);
+          particles.spawnRing(rt.anvilStrikeX, rt.anvilStrikeY, perfect ? 28 : 20, color);
+        }
+      }
+      if (rt.hammerStrikeAnim === 0) {
+        if (rt.strikesDone >= rt.strikesTotal) finishMinigame(rt, equipment, cb);
+        else spawnNextAnvilSpot(rt);
+        return;
+      }
+    }
   }
   if (rt.bellowsPumpAnim > 0) {
     rt.bellowsPumpAnim = Math.max(0, rt.bellowsPumpAnim - dt);
@@ -532,6 +560,7 @@ export function updateMinigame(
       finishMinigame(rt, equipment, cb);
     }
   } else if (rt.station === 'anvil') {
+    if (rt.hammerStrikeAnim > 0 || rt.finished) return;
     rt.ringProgress += rt.ringSpeed * dt;
     if (rt.ringProgress >= 1.16) {
       rt.streak = 0;
@@ -602,8 +631,8 @@ export function updateMinigame(
       if (!rt.submerged) {
         rt.submerged = true;
         soundEngine.playQuenchHiss();
-        particles.burstSplash(240, 152, 14);
-        particles.spawnRing(240, 156, 26, '#7dd3fc');
+        particles.burstSplash(186, 152, 14);
+        particles.spawnRing(186, 156, 26, '#7dd3fc');
       }
       rt.quenchPlunge = Math.min(1, rt.quenchPlunge + dt * 5.2);
       rt.temp = Math.max(0.02, rt.temp - 0.34 * dt);
@@ -615,7 +644,7 @@ export function updateMinigame(
         rt.statusBanner = { text: 'COOLING STEEL...', color: '#93c5fd' };
       }
       if (Math.random() < 0.38) {
-        particles.burstSteam(240, 154, 2);
+        particles.burstSteam(186, 154, 2);
       }
       if (rt.temp <= 0.03) {
         releaseQuench(rt, particles, cb);
@@ -695,8 +724,11 @@ export function renderMinigameScene(
     ctx.fillRect(rx, ry, 4, 4);
   }
 
-  // Station scene frames (furnace/anvil/grindstone/quench); null -> code-drawn fallback
-  const processFrame = isProcessStation(rt.station)
+  // Independent layered sprites are preferred; old scene art is only a fallback.
+  const layeredScene = rt.station === 'anvil'
+    ? drawAnvilLayers(ctx, rt, weapon)
+    : drawStationLayers(ctx, rt, weapon);
+  const processFrame = !layeredScene && rt.station !== 'anvil' && isProcessStation(rt.station)
     ? getProcessFrame(rt.station, pickProcessFrameIndex(rt.station, rt))
     : null;
   if (processFrame && isProcessStation(rt.station)) {
@@ -717,7 +749,7 @@ export function renderMinigameScene(
     pAction = 'tend';
     pFrame = Math.floor(rt.elapsed * 4) % 3;
   }
-  if (!processFrame) {
+  if (!processFrame && !layeredScene) {
   const pSprite = getPlayerSpriteCanvas(player, rt.hammerStrikeAnim > 0, pAction, pFrame);
   ctx.fillStyle = 'rgba(0,0,0,0.34)';
   ctx.beginPath();
@@ -730,7 +762,7 @@ export function renderMinigameScene(
 
   if (rt.station === 'furnace') {
     const heatSpec = getWeaponHeatSpec(rt.heat);
-    if (!processFrame) {
+    if (!processFrame && !layeredScene) {
     // Upgraded Furnace exterior silhouette behind active hearth throat
     const furnaceSprite = getEquipmentSheetSprite('furnace', eq.furnace, 128);
     if (furnaceSprite) {
@@ -865,7 +897,7 @@ export function renderMinigameScene(
     ctx.fillStyle = heatSpec.coreColor;
     ctx.fillText(`FORGE TEMP: ${heatSpec.bucket.toUpperCase()}`, gx, 190);
   } else if (rt.station === 'anvil') {
-    if (!processFrame) {
+    if (!layeredScene) {
     // Timber floor shadow & upgraded Anvil sprite
     ctx.fillStyle = 'rgba(0,0,0,0.42)';
     ctx.beginPath();
@@ -909,9 +941,11 @@ export function renderMinigameScene(
     ctx.arc(rt.targetX, rt.targetY, rCurrent, 0, Math.PI * 2);
     ctx.stroke();
 
+    if (layeredScene) drawAnvilHammer(ctx, rt);
+
     // Upgraded Hammer swinging arc on strike
     const hammerSprite = getEquipmentSheetSprite('hammer', eq.hammer, 64);
-    if (hammerSprite && !processFrame) {
+    if (hammerSprite && !layeredScene) {
       const swingT = rt.hammerStrikeAnim > 0 ? 1 - rt.hammerStrikeAnim / 0.24 : 0;
       const angle = rt.hammerStrikeAnim > 0 ? -0.95 + easeOutCubic(swingT) * 1.45 : -0.65;
       ctx.save();
@@ -921,7 +955,7 @@ export function renderMinigameScene(
       ctx.restore();
     }
 
-    if (rt.hammerStrikeAnim > 0.08) {
+    if (!layeredScene && rt.hammerStrikeAnim > 0.08) {
       const impact = getVfxSprite('impact', 52, 52);
       if (impact) {
         ctx.drawImage(impact, rt.targetX - 26, rt.targetY - 26, 52, 52);
@@ -936,9 +970,9 @@ export function renderMinigameScene(
     }
     ctx.fillStyle = '#f6e7cb';
     ctx.font = 'bold 9px "Courier New", monospace';
-    ctx.fillText(`STRIKE ${rt.strikesDone + 1}/${rt.strikesTotal}`, 342, 214);
+    ctx.fillText(`STRIKE ${Math.min(rt.strikesDone + 1, rt.strikesTotal)}/${rt.strikesTotal}`, 342, 214);
   } else if (rt.station === 'grindstone') {
-    if (!processFrame) {
+    if (!processFrame && !layeredScene) {
     const grindSprite = getEquipmentSheetSprite('grindstone', eq.grindstone, 112);
     if (grindSprite) {
       ctx.save();
@@ -1037,7 +1071,7 @@ export function renderMinigameScene(
     ctx.fillStyle = '#38bdf8';
     ctx.fillRect(tx + 2, 204, (tw - 4) * pct, 6);
   } else if (rt.station === 'quench') {
-    if (!processFrame) {
+    if (!processFrame && !layeredScene) {
     const quenchEq = getEquipmentSheetSprite('quench', eq.quench, 104);
     if (quenchEq) {
       ctx.save();
@@ -1122,8 +1156,8 @@ export function renderMinigameScene(
     ctx.font = 'bold 9px "Courier New", monospace';
     ctx.fillText(
       rt.submerged ? 'RELEASE IN BLUE BAND!' : 'HOLD TO SUBMERGE BLADE',
-      processFrame ? 214 : 166,
-      processFrame ? 214 : 78,
+      processFrame || layeredScene ? 214 : 166,
+      processFrame || layeredScene ? 214 : 78,
     );
   } else if (rt.station === 'workbench') {
     const wbEq = getEquipmentSheetSprite('workbench', eq.workbench, 120);

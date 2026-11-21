@@ -1,3 +1,4 @@
+import { getPaintedWeaponCanvas } from './paintedWeaponAssets';
 import { HAIR_COLORS, OUTFIT_COLORS, RARITY_ORDER, SKIN_TONES } from '../data/config';
 import { MATERIAL_BY_ID } from '../data/materials';
 import type {
@@ -1032,6 +1033,8 @@ const WEAPON_PART_LAYERS: Record<WeaponInstance['type'], PartSpriteLayer[]> = {
 const weaponSpriteCache = new Map<string, HTMLCanvasElement>();
 
 export function getWeaponSpriteCanvas(weapon: WeaponInstance): HTMLCanvasElement {
+  const painted = getPaintedWeaponCanvas(weapon, 'cold', true);
+  if (painted) return painted;
   let highestRarity: RarityId = 'common';
   let bestIdx = 0;
   for (const part of Object.values(weapon.parts)) {
@@ -1082,6 +1085,8 @@ export function getHeatedWeaponCanvas(
   weapon: WeaponInstance,
   bucket: 'cold' | 'warm' | 'hot' | 'overheat' | 'quenched',
 ): HTMLCanvasElement {
+  const painted = getPaintedWeaponCanvas(weapon, bucket === 'cold' || bucket === 'quenched' ? 'cold' : bucket === 'warm' ? 'warm' : 'hot', true);
+  if (painted) return painted;
   const base = getWeaponSpriteCanvas(weapon);
   if (bucket === 'cold') return base;
 

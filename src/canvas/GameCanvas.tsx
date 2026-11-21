@@ -1,3 +1,4 @@
+import { ensureStationLayersPreloaded } from '../gfx/stationLayers';
 import React, { useEffect, useRef } from 'react';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../data/config';
 import { ensureAssetsPreloaded } from '../gfx/assetSheets';
@@ -113,6 +114,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         station,
         forging.order.weapon.level,
         save.equipment,
+        forging.order.weapon.type,
       );
     } else {
       minigameRef.current = null;
@@ -122,6 +124,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   useEffect(() => {
     ensureAssetsPreloaded();
     ensureProcessFramesPreloaded();
+    ensureStationLayersPreloaded();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
