@@ -2,6 +2,12 @@ import { soundEngine } from '../audio/soundEngine';
 import { BALANCE } from '../data/balance';
 import { getEquipmentSheetSprite, getForgeUiSprite, getVfxSprite } from '../gfx/assetSheets';
 import { getWorkshopBgAsset } from '../gfx/generatedAssets';
+import {
+  drawProcessFrame,
+  getProcessFrame,
+  isProcessStation,
+  pickProcessFrameIndex,
+} from '../gfx/processFrames';
 import { ParticlePool } from '../gfx/particles';
 import {
   getHeatedWeaponCanvas,
@@ -689,6 +695,14 @@ export function renderMinigameScene(
     ctx.fillRect(rx, ry, 4, 4);
   }
 
+  // Station scene frames (furnace/anvil/grindstone/quench); null -> code-drawn fallback
+  const processFrame = isProcessStation(rt.station)
+    ? getProcessFrame(rt.station, pickProcessFrameIndex(rt.station, rt))
+    : null;
+  if (processFrame && isProcessStation(rt.station)) {
+    drawProcessFrame(ctx, rt.station, processFrame);
+  }
+
   // Animated Blacksmith Avatar using player sprite sheet (unlocks tend pose too!)
   let pAction: 'idle' | 'strike' | 'bellows' | 'tend' = 'idle';
   let pFrame = 0;
@@ -703,17 +717,20 @@ export function renderMinigameScene(
     pAction = 'tend';
     pFrame = Math.floor(rt.elapsed * 4) % 3;
   }
+  if (!processFrame) {
   const pSprite = getPlayerSpriteCanvas(player, rt.hammerStrikeAnim > 0, pAction, pFrame);
   ctx.fillStyle = 'rgba(0,0,0,0.34)';
   ctx.beginPath();
   ctx.ellipse(60, 203, 22, 4, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.drawImage(pSprite, 24, 128, 72, 76);
+  }
 
   const wSprite = getWeaponSpriteCanvas(weapon);
 
   if (rt.station === 'furnace') {
     const heatSpec = getWeaponHeatSpec(rt.heat);
+    if (!processFrame) {
     // Upgraded Furnace exterior silhouette behind active hearth throat
     const furnaceSprite = getEquipmentSheetSprite('furnace', eq.furnace, 128);
     if (furnaceSprite) {
@@ -803,6 +820,7 @@ export function renderMinigameScene(
       ctx.restore();
     }
     ctx.drawImage(heatedWeapon, 144, 116, 54, 54);
+    }
 
     // Diegetic vertical thermometer + heat band gauge
     const thermSprite = getForgeUiSprite('thermometer', 34, 102);
@@ -847,6 +865,7 @@ export function renderMinigameScene(
     ctx.fillStyle = heatSpec.coreColor;
     ctx.fillText(`FORGE TEMP: ${heatSpec.bucket.toUpperCase()}`, gx, 190);
   } else if (rt.station === 'anvil') {
+    if (!processFrame) {
     // Timber floor shadow & upgraded Anvil sprite
     ctx.fillStyle = 'rgba(0,0,0,0.42)';
     ctx.beginPath();
@@ -869,6 +888,7 @@ export function renderMinigameScene(
     const forgedWeapon = getHeatedWeaponCanvas(weapon, anvilHeatBucket);
     const bounceY = rt.hammerStrikeAnim > 0.14 ? 2 : 0;
     ctx.drawImage(forgedWeapon, 209, 116 + bounceY, 64, 64);
+    }
 
     // Target Ring UI Sprite + shrinking strike timing ring
     const targetRing = getForgeUiSprite('ringPerfect', 36, 36);
@@ -891,7 +911,7 @@ export function renderMinigameScene(
 
     // Upgraded Hammer swinging arc on strike
     const hammerSprite = getEquipmentSheetSprite('hammer', eq.hammer, 64);
-    if (hammerSprite) {
+    if (hammerSprite && !processFrame) {
       const swingT = rt.hammerStrikeAnim > 0 ? 1 - rt.hammerStrikeAnim / 0.24 : 0;
       const angle = rt.hammerStrikeAnim > 0 ? -0.95 + easeOutCubic(swingT) * 1.45 : -0.65;
       ctx.save();
@@ -918,6 +938,7 @@ export function renderMinigameScene(
     ctx.font = 'bold 9px "Courier New", monospace';
     ctx.fillText(`STRIKE ${rt.strikesDone + 1}/${rt.strikesTotal}`, 342, 214);
   } else if (rt.station === 'grindstone') {
+    if (!processFrame) {
     const grindSprite = getEquipmentSheetSprite('grindstone', eq.grindstone, 112);
     if (grindSprite) {
       ctx.save();
@@ -980,10 +1001,16 @@ export function renderMinigameScene(
     }
     ctx.restore();
 
+    }
+
     const tx = 110;
     const ty = 158;
     const tw = 260;
     const th = 28;
+    if (processFrame) {
+      ctx.fillStyle = 'rgba(18, 12, 10, 0.72)';
+      ctx.fillRect(tx - 6, ty - 8, tw + 12, 72);
+    }
     const sliderImg = getForgeUiSprite('sliderGreen', tw, th);
     if (sliderImg) {
       ctx.drawImage(sliderImg, tx, ty, tw, th);
@@ -1010,6 +1037,7 @@ export function renderMinigameScene(
     ctx.fillStyle = '#38bdf8';
     ctx.fillRect(tx + 2, 204, (tw - 4) * pct, 6);
   } else if (rt.station === 'quench') {
+    if (!processFrame) {
     const quenchEq = getEquipmentSheetSprite('quench', eq.quench, 104);
     if (quenchEq) {
       ctx.save();
@@ -1062,6 +1090,8 @@ export function renderMinigameScene(
       }
     }
 
+    }
+
     const quenchArc = getForgeUiSprite('quenchArc', 44, 96);
     if (quenchArc) {
       ctx.drawImage(quenchArc, 324, 102, 44, 96);
@@ -1092,8 +1122,8 @@ export function renderMinigameScene(
     ctx.font = 'bold 9px "Courier New", monospace';
     ctx.fillText(
       rt.submerged ? 'RELEASE IN BLUE BAND!' : 'HOLD TO SUBMERGE BLADE',
-      166,
-      78,
+      processFrame ? 214 : 166,
+      processFrame ? 214 : 78,
     );
   } else if (rt.station === 'workbench') {
     const wbEq = getEquipmentSheetSprite('workbench', eq.workbench, 120);

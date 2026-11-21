@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../data/config';
 import { ensureAssetsPreloaded } from '../gfx/assetSheets';
+import { ensureProcessFramesPreloaded } from '../gfx/processFrames';
 import { ParticlePool } from '../gfx/particles';
 import type {
   EquipmentId,
@@ -120,6 +121,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
   useEffect(() => {
     ensureAssetsPreloaded();
+    ensureProcessFramesPreloaded();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
