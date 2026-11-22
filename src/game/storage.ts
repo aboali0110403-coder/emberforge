@@ -90,14 +90,14 @@ export function loadSaveStateWithStatus(): SaveLoadStatus {
       // Restore backup back into primary slot cleanly
       const serialized = JSON.stringify(backupParsed);
       localStorage.setItem(SAVE_STORAGE_KEY, serialized);
-      // The recovered backup may itself have been migrated; refresh it so a
-      // second corruption cannot restore a different outcome.
+      // The recovered backup may itself have been migrated; sync it so a
+      // second corruption cannot restore a different outcome. This runs the
+      // same verified-primary sync as the migration write-back: the backup is
+      // only touched once the primary read-back confirms the restore landed,
+      // and if the refresh fails the stale backup is removed rather than left
+      // able to reroll the battle.
       if (resolvedResultsChangedOnLoad(backupRaw, backupParsed)) {
-        try {
-          localStorage.setItem(SAVE_BACKUP_KEY, serialized);
-        } catch {
-          // Primary now holds the migrated state; keep the old backup as is.
-        }
+        syncBackupAfterWriteBack(serialized, backupParsed);
       }
       return { state: backupParsed, recoveredFromBackup: true, corruptedCleared: false };
     }

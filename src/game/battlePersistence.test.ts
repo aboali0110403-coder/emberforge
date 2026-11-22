@@ -400,6 +400,9 @@ function failWritesTo(keys: string[]) {
     if (keys.includes(k)) throw new Error('QuotaExceededError');
     original(k, v);
   };
+  return () => {
+    ls.setItem = original;
+  };
 }
 
 test('A: migration write-back synchronizes the backup slot', () => {
@@ -485,4 +488,42 @@ test('D: existing valid v3 backup recovery is unchanged', () => {
   assert.deepEqual(loaded.state?.pendingBattles[0].resolvedResult, resolved.resolvedResult);
   assert.equal(loaded.state?.gold, save.gold);
   assert.equal(store.get(SAVE_BACKUP_KEY), backupBefore, 'valid backup not rewritten');
+});
+
+test('E: failed backup sync during legacy recovery drops the stale backup (no reroll)', () => {
+  const store = installMockLocalStorage();
+  seedLegacyV2(store);
+  store.set(SAVE_STORAGE_KEY, '{corrupted');
+  failWritesTo([SAVE_BACKUP_KEY]);
+  const recovered = loadSaveStateWithStatus();
+  const result = recovered.state?.pendingBattles[0].resolvedResult;
+  assert.equal(recovered.recoveredFromBackup, true);
+  assert.ok(result);
+  // The primary restore landed and holds the migrated result...
+  const primary = JSON.parse(store.get(SAVE_STORAGE_KEY) as string);
+  assert.deepEqual(primary.pendingBattles[0].resolvedResult, result);
+  // ...so the stale legacy backup that could not be synced is safely removed
+  // instead of keeping an unresolved copy of the same battle.
+  assert.equal(store.has(SAVE_BACKUP_KEY), false, 'stale backup must be removed after failed sync');
+  // Corrupt the primary again: no stale backup remains to reroll the battle,
+  // so the result can never come back different.
+  store.set(SAVE_STORAGE_KEY, '{corrupted again');
+  const second = loadSaveStateWithStatus();
+  assert.equal(second.state, null);
+  assert.equal(second.corruptedCleared, true);
+});
+
+test('F: failed primary write during backup recovery preserves the original backup', () => {
+  const store = installMockLocalStorage();
+  const raw = seedLegacyV2(store);
+  store.set(SAVE_STORAGE_KEY, '{corrupted');
+  const restoreWrites = failWritesTo([SAVE_STORAGE_KEY]);
+  loadSaveStateWithStatus();
+  // No backup is ever destroyed before a verified primary write.
+  assert.equal(store.get(SAVE_BACKUP_KEY), raw, 'original backup must be preserved');
+  // Once writes work again, the preserved backup still recovers the save.
+  restoreWrites();
+  const recovered = loadSaveStateWithStatus();
+  assert.equal(recovered.recoveredFromBackup, true);
+  assert.ok(recovered.state?.pendingBattles[0].resolvedResult);
 });
