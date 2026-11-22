@@ -115,6 +115,9 @@ export interface PendingBattle {
   ready: boolean;
   rewardMultiplier: number; // 1, or 2/3/4 for legendary milestones
   wasRoyal: boolean;
+  // V0.2: the outcome is resolved exactly once when the battle becomes ready
+  // and persisted here, so reloads/modal-opens/claims can never reroll it.
+  resolvedResult?: BattleResult;
 }
 
 export interface BattleBreakdown {

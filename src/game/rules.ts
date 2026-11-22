@@ -607,6 +607,7 @@ export function resolveBattleOutcome(
     portraitVariant: pending.portraitVariant,
     weapon: pending.weapon,
     scenarioName: pending.scenarioName,
+    enemyArchetype: pending.enemyArchetype,
     won,
     satisfaction,
     qualityGrade: grade,
@@ -614,6 +615,114 @@ export function resolveBattleOutcome(
     materialRewards,
     goldBonus,
     breakdown,
+  };
+}
+
+// V0.2: resolve a pending battle's outcome exactly once and return the battle
+// with the persisted result attached. Idempotent: a battle that already
+// carries its own resolved result is returned unchanged, never rerolled.
+export function resolvePendingBattleResult(
+  battle: PendingBattle,
+  rng: () => number = Math.random,
+): PendingBattle {
+  if (battle.resolvedResult && battle.resolvedResult.battleId === battle.id) {
+    return battle;
+  }
+  return { ...battle, resolvedResult: resolveBattleOutcome(battle, rng) };
+}
+
+export interface BattleClaimOutcome {
+  state: SaveState;
+  claimed: boolean;
+  newlyUnlockedAchievements: string[];
+  newlyUnlockedRaces: RaceId[];
+}
+
+// V0.2: claim a resolved battle. Consumes the outcome persisted on the
+// pending battle; it never rerolls. Defensive idempotency: if the battle is
+// no longer pending (already claimed), nothing is granted. Atomic within a
+// single save-state update.
+export function applyBattleClaimResult(
+  prev: SaveState,
+  displayedResult: BattleResult,
+): BattleClaimOutcome {
+  const noop: BattleClaimOutcome = {
+    state: prev,
+    claimed: false,
+    newlyUnlockedAchievements: [],
+    newlyUnlockedRaces: [],
+  };
+  const pending = prev.pendingBattles.find((b) => b.id === displayedResult.battleId);
+  if (!pending) return noop;
+
+  // The persisted result is authoritative. The displayed result is only a
+  // fallback for a battle whose result could not be persisted (legacy path).
+  const result = pending.resolvedResult ?? displayedResult;
+
+  const nextInv = { ...prev.inventory };
+  const mythics = new Set(prev.stats.mythicsCollected);
+  for (const rw of result.materialRewards) {
+    nextInv[rw.materialId] = (nextInv[rw.materialId] ?? 0) + rw.count;
+    const matDef = MATERIAL_BY_ID[rw.materialId];
+    if (matDef?.rarity === 'mythic') {
+      mythics.add(matDef.id);
+    }
+  }
+
+  const nextPop = {
+    ...prev.popularity,
+    [result.race]: Math.max(0, prev.popularity[result.race] + result.popularityDelta),
+  };
+  const nextUnlocked = checkProgressiveUnlocks(nextPop, prev.unlockedRaces);
+
+  const prevTerritories = prev.conqueredTerritories?.[result.race] ?? [];
+  const conqueredNow = result.won && !prevTerritories.includes(result.scenarioName);
+  const nextTerritories = conqueredNow
+    ? [...prevTerritories, result.scenarioName]
+    : prevTerritories;
+
+  const historyEntry: BattleResult = {
+    ...result,
+    enemyArchetype: result.enemyArchetype ?? pending.enemyArchetype,
+    territoryConquered: conqueredNow,
+  };
+
+  const draft: SaveState = {
+    ...prev,
+    gold: prev.gold + result.goldBonus,
+    inventory: nextInv,
+    popularity: nextPop,
+    unlockedRaces: nextUnlocked,
+    conqueredTerritories: {
+      ...prev.conqueredTerritories,
+      [result.race]: nextTerritories,
+    },
+    pendingBattles: prev.pendingBattles.filter((b) => b.id !== result.battleId),
+    battleHistory: [...(prev.battleHistory ?? []), historyEntry].slice(-60),
+    stats: {
+      ...prev.stats,
+      totalGoldEarned: prev.stats.totalGoldEarned + result.goldBonus,
+      mythicsCollected: Array.from(mythics),
+      battlesWon: (prev.stats.battlesWon ?? 0) + (result.won ? 1 : 0),
+      battlesLost: (prev.stats.battlesLost ?? 0) + (result.won ? 0 : 1),
+    },
+  };
+
+  const achRes = evaluateAchievements(draft);
+  if (achRes.newlyUnlocked.length > 0) {
+    draft.achievementsUnlocked = [
+      ...draft.achievementsUnlocked,
+      ...achRes.newlyUnlocked,
+    ];
+    draft.gold += achRes.goldAwarded;
+    draft.stats.totalGoldEarned += achRes.goldAwarded;
+  }
+
+  return {
+    state: draft,
+    claimed: true,
+    newlyUnlockedAchievements: achRes.newlyUnlocked,
+    newlyUnlockedRaces: nextUnlocked.slice(prev.unlockedRaces.length),
   };
 }
 
@@ -1041,6 +1150,109 @@ function sanitizeOrder(raw: unknown): Order | null {
   };
 }
 
+// V0.2: validate a persisted battle result. Anything malformed, mismatched
+// or out of range is dropped or clamped so crafted save data cannot grant
+// arbitrary rewards. Returns null when the result cannot be trusted at all;
+// the caller then re-resolves the battle once through the normal rules.
+function sanitizeBattleResult(raw: unknown, expectedBattleId: string): BattleResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Partial<BattleResult>;
+  if (typeof r.battleId !== 'string' || r.battleId !== expectedBattleId) return null;
+  if (!isValidRaceId(r.race)) return null;
+  if (typeof r.won !== 'boolean') return null;
+  const weapon = sanitizeWeaponInstance(r.weapon);
+  if (!weapon) return null;
+
+  const scenarioName =
+    typeof r.scenarioName === 'string' && r.scenarioName
+      ? r.scenarioName
+      : RACES[r.race].scenarios[0].name;
+
+  // Reward clamps match the maximum values resolveBattleOutcome can produce.
+  const materialRewards: { materialId: string; count: number }[] = [];
+  if (Array.isArray(r.materialRewards)) {
+    for (const m of r.materialRewards.slice(0, 8)) {
+      if (m && typeof m === 'object' && MATERIAL_BY_ID[(m as { materialId?: unknown }).materialId as string]) {
+        const entry = m as { materialId: string; count?: unknown };
+        const count = Math.round(
+          clamp(
+            typeof entry.count === 'number' && Number.isFinite(entry.count) ? entry.count : 0,
+            0,
+            24,
+          ),
+        );
+        if (count > 0) materialRewards.push({ materialId: entry.materialId, count });
+      }
+    }
+  }
+
+  const breakdown =
+    r.breakdown &&
+    typeof r.breakdown === 'object' &&
+    typeof (r.breakdown as Partial<BattleBreakdown>).winChancePct === 'number' &&
+    Number.isFinite((r.breakdown as Partial<BattleBreakdown>).winChancePct)
+      ? (r.breakdown as BattleBreakdown)
+      : undefined;
+
+  const clean: BattleResult = {
+    battleId: r.battleId,
+    race: r.race,
+    customerName:
+      typeof r.customerName === 'string' && r.customerName
+        ? r.customerName
+        : RACES[r.race].customerNames[0],
+    portraitVariant: Math.round(
+      clamp(
+        typeof r.portraitVariant === 'number' && Number.isFinite(r.portraitVariant)
+          ? r.portraitVariant
+          : 0,
+        0,
+        2,
+      ),
+    ),
+    weapon,
+    scenarioName,
+    enemyArchetype: getEnemyArchetypeForScenario(r.race, scenarioName, r.enemyArchetype),
+    won: r.won,
+    satisfaction: Math.round(
+      clamp(
+        typeof r.satisfaction === 'number' && Number.isFinite(r.satisfaction)
+          ? r.satisfaction
+          : 50,
+        0,
+        100,
+      ),
+    ),
+    qualityGrade:
+      typeof r.qualityGrade === 'string' && r.qualityGrade in QUALITY_GRADE_META
+        ? r.qualityGrade
+        : undefined,
+    popularityDelta: Math.round(
+      clamp(
+        typeof r.popularityDelta === 'number' && Number.isFinite(r.popularityDelta)
+          ? r.popularityDelta
+          : 0,
+        -10,
+        200,
+      ),
+    ),
+    materialRewards,
+    goldBonus: Math.round(
+      clamp(
+        typeof r.goldBonus === 'number' && Number.isFinite(r.goldBonus) ? r.goldBonus : 0,
+        0,
+        500,
+      ),
+    ),
+  };
+  // Keep optional keys absent (not undefined) so sanitized results stay
+  // deep-equal to their pre-serialization form.
+  if (typeof r.territoryConquered === 'boolean') clean.territoryConquered = r.territoryConquered;
+  if (breakdown) clean.breakdown = breakdown;
+  if (clean.qualityGrade === undefined) delete clean.qualityGrade;
+  return clean;
+}
+
 function sanitizePendingBattle(raw: unknown): PendingBattle | null {
   if (!raw || typeof raw !== 'object') return null;
   const b = raw as Partial<PendingBattle>;
@@ -1049,8 +1261,10 @@ function sanitizePendingBattle(raw: unknown): PendingBattle | null {
   if (!weapon) return null;
   const etaSec = Math.max(0, Math.round(sanitizePositiveNumber(b.etaSec, 0, 600)));
   const ready = Boolean(b.ready) || etaSec <= 0;
+  const id = typeof b.id === 'string' && b.id ? b.id : nextUid('bat');
+  const resolvedResult = sanitizeBattleResult(b.resolvedResult, id) ?? undefined;
   return {
-    id: typeof b.id === 'string' && b.id ? b.id : nextUid('bat'),
+    id,
     orderId: typeof b.orderId === 'string' ? b.orderId : '',
     race: b.race,
     customerName: typeof b.customerName === 'string' && b.customerName ? b.customerName : RACES[b.race].customerNames[0],
@@ -1070,6 +1284,44 @@ function sanitizePendingBattle(raw: unknown): PendingBattle | null {
     ready,
     rewardMultiplier: Math.round(clamp(typeof b.rewardMultiplier === 'number' && Number.isFinite(b.rewardMultiplier) ? b.rewardMultiplier : 1, 1, 4)),
     wasRoyal: Boolean(b.wasRoyal),
+    resolvedResult,
+  };
+}
+
+// Ordered, explicit save migrations. Each step upgrades the sanitized state
+// by one schema version; keep them in ascending order. Generic field
+// sanitization above always runs first and targets the CURRENT schema, so
+// every step receives structurally valid data.
+function applyOrderedMigrations(state: SaveState, fromVersion: number): SaveState {
+  let next = state;
+  // v1 -> v2: smithXp backfill; applied during sanitization (smithXp falls
+  // back to ordersCompleted * 35 when the field is absent).
+  if (fromVersion < 3) {
+    next = migrateV2toV3(next);
+  }
+  // Repair pass (any incoming version): a ready battle must always carry a
+  // persisted result. Fires when sanitization dropped a malformed result.
+  if (next.pendingBattles.some((b) => b.ready && !b.resolvedResult)) {
+    next = {
+      ...next,
+      pendingBattles: next.pendingBattles.map((b) =>
+        b.ready ? resolvePendingBattleResult(b) : b,
+      ),
+    };
+  }
+  return next;
+}
+
+// v2 -> v3: battles now persist their resolved outcome. Legacy saves can hold
+// ready battles whose outcome was never resolved (it used to be rolled at
+// modal-open time). Resolve each of them exactly once here; the result is
+// persisted with the save, so no later reload, modal open or claim can reroll.
+function migrateV2toV3(state: SaveState): SaveState {
+  return {
+    ...state,
+    pendingBattles: state.pendingBattles.map((b) =>
+      b.ready ? resolvePendingBattleResult(b) : b,
+    ),
   };
 }
 
@@ -1078,6 +1330,10 @@ export function migrateSaveState(raw: unknown): SaveState | null {
   const obj = raw as Partial<SaveState>;
   if (!obj.player || typeof obj.player !== 'object') return null;
   if (typeof obj.gold !== 'number' || !Number.isFinite(obj.gold)) return null;
+  const fromVersion =
+    typeof obj.version === 'number' && Number.isFinite(obj.version)
+      ? Math.max(1, Math.floor(obj.version))
+      : 1;
 
   const p = obj.player as Partial<PlayerCustomization>;
   const cleanPlayer: PlayerCustomization = {
@@ -1232,7 +1488,7 @@ export function migrateSaveState(raw: unknown): SaveState | null {
     muted: Boolean(rawAudio.muted),
   };
 
-  return {
+  const sanitized: SaveState = {
     version: SAVE_VERSION,
     createdAt: Math.round(sanitizePositiveNumber(obj.createdAt, base.createdAt, Number.MAX_SAFE_INTEGER)),
     updatedAt: Math.round(sanitizePositiveNumber(obj.updatedAt, Date.now(), Number.MAX_SAFE_INTEGER)),
@@ -1268,6 +1524,8 @@ export function migrateSaveState(raw: unknown): SaveState | null {
     stats: cleanStats,
     audio: cleanAudio,
   };
+
+  return applyOrderedMigrations(sanitized, fromVersion);
 }
 
 export function encodeBackupCode(state: SaveState): string {

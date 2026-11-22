@@ -23,7 +23,8 @@ export const CANVAS_HEIGHT = 270;
 
 export const SAVE_STORAGE_KEY = 'emberforge_save_v1';
 export const SAVE_BACKUP_KEY = 'emberforge_save_v1_backup';
-export const SAVE_VERSION = 2;
+// v3: pending battles carry their persisted resolved outcome (resolvedResult).
+export const SAVE_VERSION = 3;
 
 export const POPULARITY_TIERS: {
   id: PopularityTierId;

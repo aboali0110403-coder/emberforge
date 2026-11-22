@@ -20,9 +20,10 @@ import { TitleScreen } from './components/TitleScreen';
 import { ACHIEVEMENTS } from './data/achievements';
 import { BALANCE } from './data/balance';
 import { QUALITY_GRADE_META, getSmithProgress } from './data/config';
-import { MATERIALS, MATERIAL_BY_ID } from './data/materials';
+import { MATERIALS } from './data/materials';
 import { RACES } from './data/races';
 import {
+  applyBattleClaimResult,
   applyForgeUpgradesToWeapon,
   calculateDeliveryGoldBreakdown,
   calculateForgeXp,
@@ -38,6 +39,7 @@ import {
   nextUid,
   randInt,
   resolveBattleOutcome,
+  resolvePendingBattleResult,
   rollRotatingStock,
   rollWeaponLevelUp,
   sellMaterialFromInventory,
@@ -264,8 +266,11 @@ export default function App() {
         const nextBattles = prev.pendingBattles.map((b) => {
           if (b.ready) return b;
           const eta = Math.max(0, b.etaSec - 1);
-          if (eta <= 0) battleJustReady = true;
-          return { ...b, etaSec: eta, ready: eta <= 0 };
+          if (eta > 0) return { ...b, etaSec: eta, ready: false };
+          battleJustReady = true;
+          // Resolve the outcome exactly once, at the readiness transition,
+          // and persist it together with the ready state (autosave below).
+          return resolvePendingBattleResult({ ...b, etaSec: 0, ready: true });
         });
 
         let rotTimer = prev.rotatingStockTimerSec - 1;
@@ -462,20 +467,38 @@ export default function App() {
     [],
   );
 
-  const openBattleModal = useCallback((curSave: SaveState) => {
-    const ready = curSave.pendingBattles.find((b) => b.ready);
-    if (!ready) return;
-    const result = resolveBattleOutcome(ready);
-    const alreadyConquered = (curSave.conqueredTerritories?.[ready.race] ?? []).includes(
-      ready.scenarioName,
-    );
-    setActiveBattleResult({
-      ...result,
-      enemyArchetype: ready.enemyArchetype,
-      territoryConquered: result.won && !alreadyConquered,
-    });
-    setActiveModal('battle');
-  }, []);
+  const openBattleModal = useCallback(
+    (curSave: SaveState) => {
+      const ready = curSave.pendingBattles.find((b) => b.ready);
+      if (!ready) return;
+      // Consume the outcome persisted when the battle became ready; never
+      // reroll here. The fallback covers only a ready battle whose result was
+      // never persisted (crash between ticks); it resolves once and persists.
+      let result = ready.resolvedResult;
+      if (!result || result.battleId !== ready.id) {
+        const resolved = resolveBattleOutcome(ready);
+        result = resolved;
+        commitSave((prev) => {
+          const idx = prev.pendingBattles.findIndex((b) => b.id === ready.id);
+          if (idx < 0) return prev;
+          if (prev.pendingBattles[idx].resolvedResult) return prev;
+          const nextBattles = prev.pendingBattles.slice();
+          nextBattles[idx] = { ...nextBattles[idx], resolvedResult: resolved };
+          return { ...prev, pendingBattles: nextBattles };
+        });
+      }
+      const alreadyConquered = (curSave.conqueredTerritories?.[ready.race] ?? []).includes(
+        ready.scenarioName,
+      );
+      setActiveBattleResult({
+        ...result,
+        enemyArchetype: ready.enemyArchetype,
+        territoryConquered: result.won && !alreadyConquered,
+      });
+      setActiveModal('battle');
+    },
+    [commitSave],
+  );
 
   const handleSelectHotspot = useCallback(
     (id: WorkshopHotspotId) => {
@@ -808,75 +831,24 @@ export default function App() {
   const handleClaimBattle = useCallback(() => {
     if (!activeBattleResult) return;
     soundEngine.playCoin();
+    const displayed = activeBattleResult;
 
     commitSave((prev) => {
-      const nextInv = { ...prev.inventory };
-      const mythics = new Set(prev.stats.mythicsCollected);
+      // Consumes the persisted outcome; idempotent if the battle is already
+      // claimed, and never rerolls.
+      const outcome = applyBattleClaimResult(prev, displayed);
+      if (!outcome.claimed) return prev;
 
-      for (const rw of activeBattleResult.materialRewards) {
-        nextInv[rw.materialId] = (nextInv[rw.materialId] ?? 0) + rw.count;
-        const matDef = MATERIAL_BY_ID[rw.materialId];
-        if (matDef?.rarity === 'mythic') {
-          mythics.add(matDef.id);
-        }
-      }
-
-      const nextPop = {
-        ...prev.popularity,
-        [activeBattleResult.race]: Math.max(
-          0,
-          prev.popularity[activeBattleResult.race] + activeBattleResult.popularityDelta,
-        ),
-      };
-      const nextUnlocked = checkProgressiveUnlocks(nextPop, prev.unlockedRaces);
-
-      const prevTerritories = prev.conqueredTerritories?.[activeBattleResult.race] ?? [];
-      const nextTerritories =
-        activeBattleResult.won && !prevTerritories.includes(activeBattleResult.scenarioName)
-          ? [...prevTerritories, activeBattleResult.scenarioName]
-          : prevTerritories;
-
-      const draft: SaveState = {
-        ...prev,
-        gold: prev.gold + activeBattleResult.goldBonus,
-        inventory: nextInv,
-        popularity: nextPop,
-        unlockedRaces: nextUnlocked,
-        conqueredTerritories: {
-          ...prev.conqueredTerritories,
-          [activeBattleResult.race]: nextTerritories,
-        },
-        pendingBattles: prev.pendingBattles.filter(
-          (b) => b.id !== activeBattleResult.battleId,
-        ),
-        battleHistory: [...(prev.battleHistory ?? []), activeBattleResult].slice(-60),
-        stats: {
-          ...prev.stats,
-          totalGoldEarned:
-            prev.stats.totalGoldEarned + activeBattleResult.goldBonus,
-          mythicsCollected: Array.from(mythics),
-          battlesWon: (prev.stats.battlesWon ?? 0) + (activeBattleResult.won ? 1 : 0),
-          battlesLost: (prev.stats.battlesLost ?? 0) + (activeBattleResult.won ? 0 : 1),
-        },
-      };
-
-      const achRes = evaluateAchievements(draft);
-      if (achRes.newlyUnlocked.length > 0) {
-        draft.achievementsUnlocked = [
-          ...draft.achievementsUnlocked,
-          ...achRes.newlyUnlocked,
-        ];
-        draft.gold += achRes.goldAwarded;
-        draft.stats.totalGoldEarned += achRes.goldAwarded;
+      if (outcome.newlyUnlockedAchievements.length > 0) {
         showToast(`Achievement Unlocked!`);
       }
 
-      if (nextUnlocked.length > prev.unlockedRaces.length) {
-        const newest = nextUnlocked[nextUnlocked.length - 1];
+      if (outcome.newlyUnlockedRaces.length > 0) {
+        const newest = outcome.newlyUnlockedRaces[outcome.newlyUnlockedRaces.length - 1];
         showToast(`New Kingdom Unlocked: ${RACES[newest].kingdomName}!`);
       }
 
-      return draft;
+      return outcome.state;
     });
 
     setActiveBattleResult(null);
