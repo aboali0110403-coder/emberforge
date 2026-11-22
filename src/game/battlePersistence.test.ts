@@ -381,3 +381,108 @@ test('defeat consequences and victory rewards stay consistent with existing rule
     winSave.gold + winResult.goldBonus + achievementGold(winOutcome.newlyUnlockedAchievements),
   );
 });
+
+// ---- V0.2.1: backup consistency after migration write-back ----
+
+function seedLegacyV2(store: Map<string, string>): string {
+  const v2Save = makeSaveWithBattle(makePendingBattle());
+  (v2Save as { version: number }).version = 2;
+  const raw = JSON.stringify(v2Save);
+  store.set(SAVE_STORAGE_KEY, raw);
+  store.set(SAVE_BACKUP_KEY, raw);
+  return raw;
+}
+
+function failWritesTo(keys: string[]) {
+  const ls = (globalThis as unknown as { localStorage: Storage }).localStorage;
+  const original = ls.setItem.bind(ls);
+  ls.setItem = (k: string, v: string) => {
+    if (keys.includes(k)) throw new Error('QuotaExceededError');
+    original(k, v);
+  };
+}
+
+test('A: migration write-back synchronizes the backup slot', () => {
+  const store = installMockLocalStorage();
+  seedLegacyV2(store);
+  const first = loadSaveStateWithStatus().state;
+  const result = first?.pendingBattles[0].resolvedResult;
+  assert.ok(result);
+  const primary = JSON.parse(store.get(SAVE_STORAGE_KEY) as string);
+  assert.deepEqual(primary.pendingBattles[0].resolvedResult, result);
+  const backupRaw = store.get(SAVE_BACKUP_KEY);
+  if (backupRaw !== undefined) {
+    const backup = JSON.parse(backupRaw);
+    assert.ok(backup.pendingBattles[0].resolvedResult, 'backup must not keep the unresolved battle');
+    assert.deepEqual(backup.pendingBattles[0].resolvedResult, result);
+    assert.equal(backup.version, SAVE_VERSION);
+  }
+});
+
+test('B: corrupting the primary right after migration restores the same result', () => {
+  const store = installMockLocalStorage();
+  seedLegacyV2(store);
+  const first = loadSaveStateWithStatus().state;
+  const firstResult = first?.pendingBattles[0].resolvedResult;
+  assert.ok(firstResult);
+  store.set(SAVE_STORAGE_KEY, '{corrupted');
+  const second = loadSaveStateWithStatus();
+  assert.equal(second.recoveredFromBackup, true);
+  assert.deepEqual(second.state?.pendingBattles[0].resolvedResult, firstResult);
+  // Third load (after recovery) still agrees.
+  assert.deepEqual(loadSaveStateWithStatus().state?.pendingBattles[0].resolvedResult, firstResult);
+});
+
+test('B2: recovering from a legacy-only backup refreshes the backup too', () => {
+  const store = installMockLocalStorage();
+  const raw = seedLegacyV2(store);
+  store.set(SAVE_STORAGE_KEY, '{corrupted');
+  const recovered = loadSaveStateWithStatus();
+  const result = recovered.state?.pendingBattles[0].resolvedResult;
+  assert.equal(recovered.recoveredFromBackup, true);
+  assert.ok(result);
+  assert.notEqual(store.get(SAVE_BACKUP_KEY), raw);
+  store.set(SAVE_STORAGE_KEY, '{corrupted again');
+  assert.deepEqual(loadSaveStateWithStatus().state?.pendingBattles[0].resolvedResult, result);
+});
+
+test('C: failed primary write during migration leaves the last valid saves untouched', () => {
+  const store = installMockLocalStorage();
+  const raw = seedLegacyV2(store);
+  failWritesTo([SAVE_STORAGE_KEY]);
+  const loaded = loadSaveStateWithStatus();
+  assert.ok(loaded.state, 'game still loads in memory');
+  assert.equal(store.get(SAVE_STORAGE_KEY), raw);
+  assert.equal(store.get(SAVE_BACKUP_KEY), raw);
+  // Both slots are still recoverable afterwards.
+  assert.ok(loadSaveStateWithStatus().state);
+});
+
+test('C2: failed backup refresh keeps the migrated primary and drops only the stale backup', () => {
+  const store = installMockLocalStorage();
+  seedLegacyV2(store);
+  failWritesTo([SAVE_BACKUP_KEY]);
+  const first = loadSaveStateWithStatus().state;
+  const result = first?.pendingBattles[0].resolvedResult;
+  assert.ok(result);
+  const primary = JSON.parse(store.get(SAVE_STORAGE_KEY) as string);
+  assert.deepEqual(primary.pendingBattles[0].resolvedResult, result);
+  assert.equal(store.has(SAVE_BACKUP_KEY), false, 'stale backup must not survive');
+  assert.deepEqual(loadSaveStateWithStatus().state?.pendingBattles[0].resolvedResult, result);
+});
+
+test('D: existing valid v3 backup recovery is unchanged', () => {
+  const store = installMockLocalStorage();
+  const resolved = resolvePendingBattleResult(makePendingBattle(), seededRng(11));
+  const save = makeSaveWithBattle(resolved);
+  persistSaveState(save);
+  persistSaveState({ ...save, gold: save.gold + 1 });
+  const backupBefore = store.get(SAVE_BACKUP_KEY);
+  assert.ok(backupBefore);
+  store.set(SAVE_STORAGE_KEY, '{corrupted');
+  const loaded = loadSaveStateWithStatus();
+  assert.equal(loaded.recoveredFromBackup, true);
+  assert.deepEqual(loaded.state?.pendingBattles[0].resolvedResult, resolved.resolvedResult);
+  assert.equal(loaded.state?.gold, save.gold);
+  assert.equal(store.get(SAVE_BACKUP_KEY), backupBefore, 'valid backup not rewritten');
+});

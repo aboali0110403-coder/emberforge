@@ -40,6 +40,33 @@ function resolvedResultsChangedOnLoad(raw: string | null, parsed: SaveState): bo
   }
 }
 
+// After a load write-back landed in the primary slot, make sure the backup
+// slot cannot restore a different outcome for the same ready battle. Only runs
+// once the primary read-back matches what was written, and only touches the
+// backup when it is stale (its results are missing or differ from the primary).
+// If the refresh fails (quota), the stale backup is removed: the verified
+// primary is the valid save, and a stale backup could reroll a battle.
+function syncBackupAfterWriteBack(serialized: string, parsed: SaveState): void {
+  try {
+    if (localStorage.getItem(SAVE_STORAGE_KEY) !== serialized) return;
+    const backupRaw = localStorage.getItem(SAVE_BACKUP_KEY);
+    if (backupRaw === null || backupRaw === serialized) return;
+    if (!tryParseSave(backupRaw)) return;
+    if (!resolvedResultsChangedOnLoad(backupRaw, parsed)) return;
+    try {
+      localStorage.setItem(SAVE_BACKUP_KEY, serialized);
+    } catch {
+      try {
+        localStorage.removeItem(SAVE_BACKUP_KEY);
+      } catch {
+        // Ignore
+      }
+    }
+  } catch {
+    // Ignore
+  }
+}
+
 export function loadSaveStateWithStatus(): SaveLoadStatus {
   try {
     const primaryRaw = localStorage.getItem(SAVE_STORAGE_KEY);
@@ -47,7 +74,9 @@ export function loadSaveStateWithStatus(): SaveLoadStatus {
     if (primaryParsed) {
       if (resolvedResultsChangedOnLoad(primaryRaw, primaryParsed)) {
         try {
-          localStorage.setItem(SAVE_STORAGE_KEY, JSON.stringify(primaryParsed));
+          const serialized = JSON.stringify(primaryParsed);
+          localStorage.setItem(SAVE_STORAGE_KEY, serialized);
+          syncBackupAfterWriteBack(serialized, primaryParsed);
         } catch {
           // Ignore quota errors; the next persist will carry the results.
         }
@@ -59,7 +88,17 @@ export function loadSaveStateWithStatus(): SaveLoadStatus {
     const backupParsed = tryParseSave(backupRaw);
     if (backupParsed) {
       // Restore backup back into primary slot cleanly
-      localStorage.setItem(SAVE_STORAGE_KEY, JSON.stringify(backupParsed));
+      const serialized = JSON.stringify(backupParsed);
+      localStorage.setItem(SAVE_STORAGE_KEY, serialized);
+      // The recovered backup may itself have been migrated; refresh it so a
+      // second corruption cannot restore a different outcome.
+      if (resolvedResultsChangedOnLoad(backupRaw, backupParsed)) {
+        try {
+          localStorage.setItem(SAVE_BACKUP_KEY, serialized);
+        } catch {
+          // Primary now holds the migrated state; keep the old backup as is.
+        }
+      }
       return { state: backupParsed, recoveredFromBackup: true, corruptedCleared: false };
     }
 
