@@ -1,3 +1,5 @@
+// Included here because the existing test command lists suite files explicitly.
+import './saveReliability.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

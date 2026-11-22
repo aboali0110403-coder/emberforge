@@ -56,6 +56,15 @@ import {
   loadSaveStateWithStatus,
   persistSaveState,
 } from './game/storage';
+import {
+  advanceAutosave,
+  bindLifecyclePersistence,
+  deliverSaveWarning,
+  persistenceWarning,
+  preferHigherWarning,
+  resolveContinueSave,
+} from './game/saveReliability';
+import type { SaveWarning, ShownSaveWarning } from './game/saveReliability';
 import { STRINGS } from './strings';
 import type {
   ActiveModal,
@@ -106,11 +115,25 @@ export default function App() {
   } | null>(null);
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<SaveWarning | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const [bgPaused, setBgPaused] = useState(false);
 
   const saveRef = useRef<SaveState | null>(null);
-  saveRef.current = save;
+  const autosaveElapsed = useRef(0);
+  const simulationUi = useRef({ activeModal, forging });
+  simulationUi.current = { activeModal, forging };
+  const pendingSaveWarning = useRef<SaveWarning | null>(null);
+  const displayedSaveWarning = useRef<SaveWarning | null>(null);
+  const lastSaveWarning = useRef<ShownSaveWarning | null>(null);
+  const persistenceFailed = useRef(false);
+
+  // Publish synchronously so back-to-back events always see the latest state.
+  // React receives a value, never a replayable updater with side effects.
+  const publishSave = useCallback((next: SaveState | null) => {
+    saveRef.current = next;
+    setSave(next);
+  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -119,15 +142,59 @@ export default function App() {
     }, 3400);
   }, []);
 
-  const commitSave = useCallback((updater: (prev: SaveState) => SaveState) => {
-    setSave((prev) => {
-      if (!prev) return prev;
-      const next = updater(prev);
-      persistSaveState(next);
-      setStoredSave(next);
-      return next;
-    });
+  const flushSaveWarning = useCallback(() => {
+    const now = Date.now();
+    const delivery = deliverSaveWarning(
+      pendingSaveWarning.current, displayedSaveWarning.current,
+      lastSaveWarning.current, document.hidden, now,
+    );
+    pendingSaveWarning.current = delivery.pending;
+    if (delivery.show) {
+      lastSaveWarning.current = { severity: delivery.show.severity, at: now };
+      displayedSaveWarning.current = delivery.show;
+      setSaveWarning(delivery.show);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!saveWarning) return;
+    const timer = window.setTimeout(() => {
+      // An old dismissal must not clear a higher warning queued before render.
+      if (displayedSaveWarning.current === saveWarning) {
+        displayedSaveWarning.current = null;
+        setSaveWarning(null);
+      }
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [saveWarning]);
+
+  const persistCurrent = useCallback((next: SaveState, deferWarning = false) => {
+    const result = persistSaveState(next);
+    persistenceFailed.current = result.status === 'failed';
+    if (result.status !== 'failed') {
+      autosaveElapsed.current = 0;
+      setStoredSave(next);
+    }
+    const warning = persistenceWarning(result);
+    if (warning) {
+      pendingSaveWarning.current = preferHigherWarning(pendingSaveWarning.current, warning);
+    }
+    if (!deferWarning) flushSaveWarning();
+    return result;
+  }, [flushSaveWarning]);
+
+  const commitSave = useCallback((updater: (prev: SaveState) => SaveState) => {
+    const prev = saveRef.current;
+    if (!prev) return;
+    const next = updater(prev);
+    publishSave(next);
+    persistCurrent(next);
+  }, [persistCurrent, publishSave]);
+
+  useEffect(() => bindLifecyclePersistence(
+    document, window, () => saveRef.current,
+    (state) => persistCurrent(state, true), flushSaveWarning,
+  ), [persistCurrent, flushSaveWarning]);
 
   // Support ?autostart=1 for immediate testing/play
   useEffect(() => {
@@ -143,12 +210,11 @@ export default function App() {
           skinToneIndex: 0,
           outfitColorIndex: 0,
         });
-      persistSaveState(initial);
-      setStoredSave(initial);
-      setSave(initial);
+      publishSave(initial);
+      persistCurrent(initial);
       setScreen('workshop');
     }
-  }, []);
+  }, [publishSave, persistCurrent]);
 
   // Mirror game state machine to document.body.dataset.state
   useEffect(() => {
@@ -208,110 +274,107 @@ export default function App() {
   // Active Play Timer (1 Hz) + 30s Autosave
   useEffect(() => {
     if (screen !== 'workshop' || bgPaused) return;
-    let autosaveCounter = 0;
 
     const timer = window.setInterval(() => {
+      const prev = saveRef.current;
+      if (!prev || document.hidden) return;
       setSummonCooldownSec((c) => (c > 0 ? Math.max(0, c - 1) : 0));
+      // Deadlines pause in shop, menus, settings, and during mini-game steps
+      const deadlinesPaused =
+        simulationUi.current.activeModal !== null || simulationUi.current.forging !== null;
 
-      setSave((prev) => {
-        if (!prev) return prev;
-        // Deadlines pause in shop, menus, settings, and during mini-game steps
-        const deadlinesPaused = activeModal !== null || forging !== null;
+      let nextOrders = prev.orders;
+      let nextPop = prev.popularity;
+      let nextMissed = prev.stats.ordersMissed;
+      let nextNoMissStreak = prev.stats.noMissStreak;
+      let nextCustomerTimer = prev.nextCustomerTimerSec;
 
-        let nextOrders = prev.orders;
-        let nextPop = prev.popularity;
-        let nextMissed = prev.stats.ordersMissed;
-        let nextNoMissStreak = prev.stats.noMissStreak;
-        let nextCustomerTimer = prev.nextCustomerTimerSec;
-
-        if (!deadlinesPaused) {
-          const updatedOrders: Order[] = [];
-          for (const ord of prev.orders) {
-            const rem = ord.remainingSec - 1;
-            if (rem <= 0 && !ord.isTutorial) {
-              nextMissed += 1;
-              nextNoMissStreak = 0;
-              nextPop = {
-                ...nextPop,
-                [ord.race]: Math.max(
-                  0,
-                  nextPop[ord.race] - BALANCE.popularityMissDeadlinePenalty,
-                ),
-              };
-              showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
-            } else {
-              updatedOrders.push({
-                ...ord,
-                remainingSec: ord.isTutorial ? Math.max(60, rem) : rem,
-              });
-            }
-          }
-          nextOrders = updatedOrders;
-
-          // Customer arrival at door
-          if (nextOrders.length < BALANCE.maxActiveOrders) {
-            nextCustomerTimer -= 1;
-            if (nextCustomerTimer <= 0) {
-              nextOrders = [...nextOrders, generateCustomerOrder(prev)];
-              nextCustomerTimer = randInt(
-                BALANCE.customerArrivalSecMin,
-                BALANCE.customerArrivalSecMax,
-              );
-            }
+      if (!deadlinesPaused) {
+        const updatedOrders: Order[] = [];
+        for (const ord of prev.orders) {
+          const rem = ord.remainingSec - 1;
+          if (rem <= 0 && !ord.isTutorial) {
+            nextMissed += 1;
+            nextNoMissStreak = 0;
+            nextPop = {
+              ...nextPop,
+              [ord.race]: Math.max(
+                0,
+                nextPop[ord.race] - BALANCE.popularityMissDeadlinePenalty,
+              ),
+            };
+            showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
+          } else {
+            updatedOrders.push({
+              ...ord,
+              remainingSec: ord.isTutorial ? Math.max(60, rem) : rem,
+            });
           }
         }
+        nextOrders = updatedOrders;
 
-        // Pending battles & rotating shop tick in active workshop time (outside settings/title)
-        let battleJustReady = false;
-        const nextBattles = prev.pendingBattles.map((b) => {
-          if (b.ready) return b;
-          const eta = Math.max(0, b.etaSec - 1);
-          if (eta > 0) return { ...b, etaSec: eta, ready: false };
-          battleJustReady = true;
-          // Resolve the outcome exactly once, at the readiness transition,
-          // and persist it together with the ready state (autosave below).
-          return resolvePendingBattleResult({ ...b, etaSec: 0, ready: true });
-        });
-
-        let rotTimer = prev.rotatingStockTimerSec - 1;
-        let rotStock = prev.rotatingStock;
-        if (rotTimer <= 0) {
-          rotTimer = BALANCE.rotatingStockRefreshSec;
-          const includeEpic = Object.values(prev.popularity).some((v) => v >= 140);
-          rotStock = rollRotatingStock(Math.random, includeEpic);
+        // Customer arrival at door
+        if (nextOrders.length < BALANCE.maxActiveOrders) {
+          nextCustomerTimer -= 1;
+          if (nextCustomerTimer <= 0) {
+            nextOrders = [...nextOrders, generateCustomerOrder(prev)];
+            nextCustomerTimer = randInt(
+              BALANCE.customerArrivalSecMin,
+              BALANCE.customerArrivalSecMax,
+            );
+          }
         }
+      }
 
-        const orderExpiredOrArrived =
-          nextOrders.length !== prev.orders.length || nextMissed !== prev.stats.ordersMissed;
-
-        const next: SaveState = {
-          ...prev,
-          activePlaySec: prev.activePlaySec + 1,
-          orders: nextOrders,
-          popularity: nextPop,
-          pendingBattles: nextBattles,
-          rotatingStock: rotStock,
-          rotatingStockTimerSec: rotTimer,
-          nextCustomerTimerSec: nextCustomerTimer,
-          stats: {
-            ...prev.stats,
-            ordersMissed: nextMissed,
-            noMissStreak: nextNoMissStreak,
-          },
-        };
-
-        autosaveCounter += 1;
-        if (autosaveCounter >= 30 || orderExpiredOrArrived || battleJustReady) {
-          autosaveCounter = 0;
-          persistSaveState(next);
-          setStoredSave(next);
-        }
-        return next;
+      // Pending battles & rotating shop tick in active workshop time (outside settings/title)
+      let battleJustReady = false;
+      const nextBattles = prev.pendingBattles.map((b) => {
+        if (b.ready) return b;
+        const eta = Math.max(0, b.etaSec - 1);
+        if (eta > 0) return { ...b, etaSec: eta, ready: false };
+        battleJustReady = true;
+        // Resolve the outcome exactly once, at the readiness transition,
+        // and persist it together with the ready state (autosave below).
+        return resolvePendingBattleResult({ ...b, etaSec: 0, ready: true });
       });
+
+      let rotTimer = prev.rotatingStockTimerSec - 1;
+      let rotStock = prev.rotatingStock;
+      if (rotTimer <= 0) {
+        rotTimer = BALANCE.rotatingStockRefreshSec;
+        const includeEpic = Object.values(prev.popularity).some((v) => v >= 140);
+        rotStock = rollRotatingStock(Math.random, includeEpic);
+      }
+
+      const orderExpiredOrArrived =
+        nextOrders.length !== prev.orders.length || nextMissed !== prev.stats.ordersMissed;
+
+      const next: SaveState = {
+        ...prev,
+        activePlaySec: prev.activePlaySec + 1,
+        orders: nextOrders,
+        popularity: nextPop,
+        pendingBattles: nextBattles,
+        rotatingStock: rotStock,
+        rotatingStockTimerSec: rotTimer,
+        nextCustomerTimerSec: nextCustomerTimer,
+        stats: {
+          ...prev.stats,
+          ordersMissed: nextMissed,
+          noMissStreak: nextNoMissStreak,
+        },
+      };
+
+      const cadence = advanceAutosave(autosaveElapsed.current, 1000);
+      autosaveElapsed.current = cadence.elapsedMs;
+      publishSave(next);
+      if (cadence.due || orderExpiredOrArrived || battleJustReady) {
+        persistCurrent(next);
+      }
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [screen, bgPaused, activeModal, forging, showToast]);
+  }, [screen, bgPaused, showToast, publishSave, persistCurrent]);
 
   const handleSwitchForgeStation = useCallback(
     (mode: { kind: 'index'; index: number } | { kind: 'delta'; delta: 1 | -1 }) => {
@@ -424,13 +487,18 @@ export default function App() {
   const handleContinue = useCallback(() => {
     soundEngine.unlock();
     soundEngine.playUiBlip(740);
-    const loaded = loadSaveState();
+    const continuation = resolveContinueSave(
+      saveRef.current, persistenceFailed.current, loadSaveState,
+    );
+    const loaded = continuation.state;
     if (loaded) {
-      setSave(loaded);
+      publishSave(loaded);
+      if (continuation.retryLive) persistCurrent(loaded);
+      autosaveElapsed.current = 0;
       setRecoveryNotice(null);
       setScreen('workshop');
     }
-  }, []);
+  }, [publishSave, persistCurrent]);
 
   const handleStartNewGame = useCallback(() => {
     soundEngine.unlock();
@@ -443,12 +511,11 @@ export default function App() {
     soundEngine.unlock();
     soundEngine.playLevelUp();
     const fresh = createInitialSaveState(player);
-    persistSaveState(fresh);
-    setStoredSave(fresh);
-    setSave(fresh);
+    publishSave(fresh);
+    persistCurrent(fresh);
     setScreen('workshop');
     setActiveModal('orders');
-  }, []);
+  }, [publishSave, persistCurrent]);
 
   const handleImportBackup = useCallback(
     (code: string): boolean => {
@@ -456,15 +523,14 @@ export default function App() {
       if (!parsed) return false;
       soundEngine.unlock();
       soundEngine.playLevelUp();
-      persistSaveState(parsed);
-      setStoredSave(parsed);
-      setSave(parsed);
+      publishSave(parsed);
+      persistCurrent(parsed);
       setRecoveryNotice(null);
       setScreen('workshop');
       setActiveModal(null);
       return true;
     },
-    [],
+    [publishSave, persistCurrent],
   );
 
   const openBattleModal = useCallback(
@@ -1121,9 +1187,8 @@ export default function App() {
           onResetGame={() => {
             const fresh = createInitialSaveState(save.player);
             fresh.audio = save.audio;
-            persistSaveState(fresh);
-            setStoredSave(fresh);
-            setSave(fresh);
+            publishSave(fresh);
+            persistCurrent(fresh);
             setForging(null);
             setForgePaused(false);
             setActiveModal('orders');
@@ -1132,14 +1197,20 @@ export default function App() {
           onDeleteSave={() => {
             clearSaveState();
             setStoredSave(null);
-            setSave(null);
+            publishSave(null);
+            autosaveElapsed.current = 0;
+            pendingSaveWarning.current = null;
+            displayedSaveWarning.current = null;
+            setSaveWarning(null);
+            lastSaveWarning.current = null;
+            persistenceFailed.current = false;
             setForging(null);
             setForgePaused(false);
             setActiveModal(null);
             setScreen('title');
           }}
           onReturnToTitle={() => {
-            if (save) persistSaveState(save);
+            if (saveRef.current) persistCurrent(saveRef.current);
             setActiveModal(null);
             setScreen('title');
           }}
@@ -1188,10 +1259,10 @@ export default function App() {
         />
       )}
 
-      {/* Subtle Toast Banner */}
-      {toastMsg && (
-        <div className="pointer-events-none fixed bottom-12 left-1/2 z-50 -translate-x-1/2 border-2 border-[#fde047] bg-[#1a110e] px-4 py-2 shadow-lg">
-          <span className="font-pixel text-xs font-bold text-[#fde047]">{toastMsg}</span>
+      {/* Save warnings sit above the portrait rotate hint; ordinary toasts keep their existing layer. */}
+      {(saveWarning || toastMsg) && (
+        <div className={`pointer-events-none fixed bottom-12 left-1/2 ${saveWarning ? 'z-[60]' : 'z-50'} -translate-x-1/2 border-2 border-[#fde047] bg-[#1a110e] px-4 py-2 shadow-lg`}>
+          <span className="font-pixel text-xs font-bold text-[#fde047]">{saveWarning?.message ?? toastMsg}</span>
         </div>
       )}
 
