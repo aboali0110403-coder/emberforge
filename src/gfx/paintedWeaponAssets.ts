@@ -22,9 +22,7 @@ function request(type: WeaponTypeId, tier: number, heat: PaintedHeat): void {
   canvases.set(key, canvas);
 }
 export function ensurePaintedWeaponsPreloaded(): void {
-  for (const type of PAINTED_WEAPON_TYPES) {
-    for (let tier = 0; tier < 5; tier++) request(type, tier, 'cold');
-  }
+  // Only the requested type/tier/heat is loaded by getPaintedWeaponCanvas.
 }
 export function getPaintedWeaponCanvas(weapon: WeaponInstance, heat: PaintedHeat = 'cold', square = false): HTMLCanvasElement | null {
   const tier = getPaintedWeaponTier(weapon);

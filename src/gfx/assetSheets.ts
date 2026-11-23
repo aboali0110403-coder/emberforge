@@ -1,3 +1,4 @@
+import { enqueueProcessing, yieldProcessing, processNativeCrop } from './spriteProcessing';
 import { assetLoader, assetUrl, requestImage } from './assetLoader';
 import { HAIR_COLORS, OUTFIT_COLORS, SKIN_TONES } from '../data/config';
 import type {
@@ -39,14 +40,15 @@ export const ASSET_PATHS = {
 
 export type AssetSheetKey = keyof typeof ASSET_PATHS;
 
+const processingSprites = new Set<string>();
+const failedSprites = new Map<string, number>();
 const spriteCache = new Map<string, HTMLCanvasElement>();
 export const subscribeAssetLoad = assetLoader.subscribe;
 export function ensureAssetsPreloaded(): void {
-  for (const key of Object.keys(ASSET_PATHS) as AssetSheetKey[]) requestImage(`sheet:${key}`, ASSET_PATHS[key]);
+  requestImage('sheet:workshopBg', ASSET_PATHS.workshopBg, 0);
 }
 export function getLoadedSheet(key: AssetSheetKey): HTMLImageElement | null {
-  ensureAssetsPreloaded();
-  return assetLoader.get(`sheet:${key}`);
+  return requestImage(`sheet:${key}`, ASSET_PATHS[key], key === 'workshopBg' ? 0 : 1);
 }
 
 function makeCanvas(w: number, h: number, willReadFrequently = false): HTMLCanvasElement {
@@ -95,7 +97,7 @@ function extractChromaSprite(
   outW: number,
   outH: number,
   mode: 'contain' | 'cover' | 'stretch' = 'contain',
-  postProcess?: (data: Uint8ClampedArray, w: number, h: number) => void,
+  postProcess?: (data: Uint8ClampedArray, w: number, h: number, offsetY: number, fullHeight: number) => void,
 ): HTMLCanvasElement | null {
   const existing = spriteCache.get(cacheKey);
   if (existing) return existing;
@@ -108,16 +110,24 @@ function extractChromaSprite(
   const sw = Math.max(1, Math.min(img.naturalWidth - sx, Math.round(rect.w)));
   const sh = Math.max(1, Math.min(img.naturalHeight - sy, Math.round(rect.h)));
 
+  if (processingSprites.has(cacheKey) || failedSprites.get(cacheKey) === assetLoader.getRetryVersion()) return null;
+  processingSprites.add(cacheKey);
+  assetLoader.markProcessing(`sheet:${sheetKey}|${cacheKey}`, true);
+  enqueueProcessing(async () => {
   // Step 1: Extract source region and strip magenta at native detail
   const work = makeCanvas(sw, sh, true);
   const wCtx = work.getContext('2d', { willReadFrequently: true })!;
-  wCtx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-  const imgData = wCtx.getImageData(0, 0, sw, sh);
-  keyOutMagentaInPlace(imgData.data);
-  if (postProcess) {
-    postProcess(imgData.data, sw, sh);
+  const native = await processNativeCrop(img, sx, sy, sw, sh);
+  if (!native) wCtx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  // Process small native-detail stripes; preserve whole-image coordinates for tinting.
+  for (let y = 0; y < sh; y += 16) {
+    const rows = Math.min(16, sh - y);
+    const imgData = native ? new ImageData(native.slice(y * sw * 4, (y + rows) * sw * 4), sw, rows) : wCtx.getImageData(0, y, sw, rows);
+    if (!native) keyOutMagentaInPlace(imgData.data);
+    postProcess?.(imgData.data, sw, rows, y, sh);
+    wCtx.putImageData(imgData, 0, y);
+    await yieldProcessing();
   }
-  wCtx.putImageData(imgData, 0, 0);
 
   // Step 2: Blit into crisp target canvas
   const out = makeCanvas(outW, outH);
@@ -144,7 +154,14 @@ function extractChromaSprite(
   }
 
   spriteCache.set(cacheKey, out);
-  return out;
+  processingSprites.delete(cacheKey);
+  assetLoader.markProcessing(`sheet:${sheetKey}|${cacheKey}`, false);
+  }).catch(() => {
+    processingSprites.delete(cacheKey);
+    failedSprites.set(cacheKey, assetLoader.getRetryVersion());
+    assetLoader.markProcessing(`sheet:${sheetKey}|${cacheKey}`, false, 'Sprite processing failed');
+  });
+  return null;
 }
 
 // ============================================================================
@@ -550,10 +567,10 @@ export function getPlayerSheetSprite(
     size,
     size,
     'contain',
-    (data, w, h) => {
+    (data, w, h, offsetY, fullHeight) => {
       // Recolor shirt tunic sleeves, skin, and hair while preserving leather apron & outlines
       for (let py = 0; py < h; py++) {
-        const yFrac = py / h;
+        const yFrac = (py + offsetY) / fullHeight;
         for (let px = 0; px < w; px++) {
           const i = (py * w + px) * 4;
           if (data[i + 3] < 20) continue;

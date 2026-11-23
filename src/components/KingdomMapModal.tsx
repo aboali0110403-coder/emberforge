@@ -8,6 +8,8 @@ import { assetLoader } from '../gfx/assetLoader';
 import type { KingLetter, RaceId, SaveState } from '../types';
 import { HudIconSprite, PortraitSprite } from './PixelThumbnail';
 
+const subscribeMap = (cb: () => void) => assetLoader.subscribeKeys(['sheet:worldMap'], cb);
+
 interface KingdomMapModalProps {
   save: SaveState;
   onClose: () => void;
@@ -22,7 +24,7 @@ const MAP_PINS: { id: RaceId; left: string; top: string; nx: number; ny: number 
 ];
 
 export const KingdomMapModal: React.FC<KingdomMapModalProps> = ({ save, onClose }) => {
-  const assetVersion = useSyncExternalStore(assetLoader.subscribe, assetLoader.getVersion, assetLoader.getVersion);
+  const assetVersion = useSyncExternalStore(subscribeMap, assetLoader.getVersion, assetLoader.getVersion);
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = mapCanvasRef.current; const image = getLoadedSheet('worldMap');

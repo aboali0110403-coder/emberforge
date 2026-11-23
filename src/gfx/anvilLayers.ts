@@ -10,12 +10,11 @@ export const ANVIL_SWING_SECONDS = 0.32;
 export const ANVIL_IMPACT_AT = 0.09;
 
 export function ensureAnvilLayersPreloaded(): void {
-  for (const name of names) requestImage(`anvil:${name}`, assetUrl(`assets/anvil/${name}.png`));
+  // Demand-loaded by getAnvilLayer.
 }
 
 export function getAnvilLayer(name: Layer): HTMLImageElement | null {
-  ensureAnvilLayersPreloaded();
-  return assetLoader.get(`anvil:${name}`) ?? null;
+  return requestImage(`anvil:${name}`, assetUrl(`assets/anvil/${name}.png`));
 }
 
 export interface AnvilLayerState {
@@ -35,8 +34,9 @@ export function drawAnvilLayers(
   rt: AnvilLayerState,
   weapon: WeaponInstance,
 ): boolean {
-  ensureAnvilLayersPreloaded();
-  if (!names.every(name => assetLoader.get(`anvil:${name}`) !== null)) return false;
+  const needed = names.filter(name => !name.startsWith('blade-'));
+  for (const name of needed) getAnvilLayer(name);
+  if (!needed.every(name => assetLoader.get(`anvil:${name}`) !== null)) return false;
   const draw = (name: Layer, x: number, y: number, w?: number, h?: number) => {
     const image = assetLoader.get(`anvil:${name}`)!;
     ctx.drawImage(image, Math.round(x), Math.round(y), w ?? image.width, h ?? image.height);

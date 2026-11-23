@@ -26,15 +26,12 @@ function key(station: ProcessStation, frame: number): string {
 }
 
 export function ensureProcessFramesPreloaded(): void {
-  for (const station of Object.keys(FILE_NAME) as ProcessStation[]) {
-    for (let frame = 1; frame <= 3; frame++) requestImage(`process:${key(station, frame)}`, assetUrl(`assets/process/process-${FILE_NAME[station]}-${frame}.png`));
-  }
+  // Scene frames are requested by getProcessFrame only.
 }
 
 /** frame is 1..3. Returns null until that image has loaded. */
 export function getProcessFrame(station: ProcessStation, frame: 1 | 2 | 3): HTMLImageElement | null {
-  ensureProcessFramesPreloaded();
-  const img = assetLoader.get(`process:${key(station, frame)}`);
+  const img = requestImage(`process:${key(station, frame)}`, assetUrl(`assets/process/process-${FILE_NAME[station]}-${frame}.png`));
   return img && img.complete && img.naturalWidth > 0 ? img : null;
 }
 

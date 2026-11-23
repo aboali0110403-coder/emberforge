@@ -1,10 +1,9 @@
+import { assetLoader } from '../gfx/assetLoader';
+import { getPaintedWeaponTier } from '../gfx/paintedWeaponAssets';
 import React, { useEffect, useRef, useState } from 'react';
-import { ensurePaintedWeaponsPreloaded } from '../gfx/paintedWeaponAssets';
 import {
-  ensureAssetsPreloaded,
   getEquipmentSheetSprite,
   getHudIconCanvas,
-  subscribeAssetLoad,
   type HudIconId,
 } from '../gfx/assetSheets';
 import { getPortraitAsset } from '../gfx/generatedAssets';
@@ -20,15 +19,13 @@ import type {
   WeaponInstance,
 } from '../types';
 
-function useAssetRefresh(): number {
+function useAssetRefresh(category: string): number {
   const [version, setVersion] = useState(0);
   useEffect(() => {
     const refresh = () => setVersion((v) => v + 1);
-    const unsubscribeAssets = subscribeAssetLoad(refresh);
-    ensureAssetsPreloaded();
-    ensurePaintedWeaponsPreloaded();
+    const unsubscribeAssets = assetLoader.subscribeMatching(key => category.split('|').some(prefix => key.startsWith(prefix)), refresh);
     return () => { unsubscribeAssets(); };
-  }, []);
+  }, [category]);
   return version;
 }
 
@@ -83,7 +80,7 @@ export const PortraitSprite: React.FC<{
   isKing?: boolean;
   size?: number;
 }> = ({ race, variant, isKing = false, size = 48 }) => {
-  useAssetRefresh();
+  useAssetRefresh(isKing ? 'sheet:kings5' : 'sheet:portraits');
   const src = getPortraitAsset(race, variant, isKing);
   return <PixelCanvasView source={src} size={size} label={`${race} portrait`} />;
 };
@@ -92,7 +89,7 @@ export const WeaponSprite: React.FC<{
   weapon: WeaponInstance;
   size?: number;
 }> = ({ weapon, size = 48 }) => {
-  useAssetRefresh();
+  useAssetRefresh(`weapon:${weapon.type}-t${getPaintedWeaponTier(weapon)}-cold|sheet:${['sword','shield','dagger','spear','cleaver'].includes(weapon.type) ? 'weaponsA' : 'weaponsB'}`);
   const src = getWeaponSpriteCanvas(weapon);
   return <PixelCanvasView source={src} size={size} label={`${weapon.type} sprite`} />;
 };
@@ -101,7 +98,7 @@ export const MaterialSprite: React.FC<{
   materialId: string;
   size?: number;
 }> = ({ materialId, size = 28 }) => {
-  useAssetRefresh();
+  useAssetRefresh('sheet:icons15');
   const src = getMaterialIconCanvas(materialId);
   return <PixelCanvasView source={src} size={size} label={materialId} />;
 };
@@ -110,7 +107,7 @@ export const PlayerSpritePreview: React.FC<{
   player: PlayerCustomization;
   size?: number;
 }> = ({ player, size = 96 }) => {
-  useAssetRefresh();
+  useAssetRefresh('sheet:playerSheet');
   const src = getPlayerSpriteCanvas(player, false);
   return <PixelCanvasView source={src} size={size} label="Blacksmith preview" />;
 };
@@ -120,7 +117,7 @@ export const EquipmentSprite: React.FC<{
   tier: number;
   size?: number;
 }> = ({ equipmentId, tier, size = 56 }) => {
-  useAssetRefresh();
+  useAssetRefresh('sheet:equipment');
   const src = getEquipmentSheetSprite(equipmentId, tier, 72);
   if (!src) {
     return (
@@ -145,7 +142,7 @@ export const HudIconSprite: React.FC<{
   size?: number;
   label?: string;
 }> = ({ icon, size = 18, label }) => {
-  useAssetRefresh();
+  useAssetRefresh('sheet:icons15');
   const src = getHudIconCanvas(icon, 32);
   if (!src) {
     return <span style={{ width: size, height: size }} className="inline-block shrink-0" />;
