@@ -9,7 +9,11 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/game/rules.test.ts src/game/battlePersistence.test.ts src/canvas/minigames.test.ts src/gfx/paintedWeaponAssets.test.ts"
+    "test": "tsx --test src/game/rules.test.ts src/game/battlePersistence.test.ts src/canvas/minigames.test.ts src/gfx/paintedWeaponAssets.test.ts",
+    "sim:balance": "tsx --test src/game/sim/balanceHarness.test.ts",
+    "sim:forging": "tsx src/game/sim/forgingBaselineReport.ts",
+    "sim:progression": "tsx --test src/game/orderCapability.test.ts src/game/sim/orderCapabilityCandidates.test.ts src/game/sim/orderProgressionHarness.test.ts",
+    "sim:reputation": "tsx --test src/game/reputation.test.ts src/game/sim/reputationHarness.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

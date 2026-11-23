@@ -1,3 +1,4 @@
+import { assetLoader, assetUrl, requestImage } from './assetLoader';
 import type { WeaponInstance } from '../types';
 import { drawPaintedWorkpiece, ensurePaintedWeaponsPreloaded } from './paintedWeapons';
 import { ensureAnvilLayersPreloaded, getAnvilLayer } from './anvilLayers';
@@ -6,18 +7,10 @@ const names = ['furnace-backdrop', 'fire-0', 'fire-1', 'fire-2', 'bellows',
   'grind-backdrop', 'wheel', 'quench-backdrop', 'barrel-back', 'barrel-front',
   'water-0', 'water-1', 'water-2', 'steam-0', 'steam-1', 'steam-2'] as const;
 type Layer = typeof names[number];
-const images = new Map<Layer, HTMLImageElement>();
-let started = false;
 export function ensureStationLayersPreloaded(): void {
   ensureAnvilLayersPreloaded();
   ensurePaintedWeaponsPreloaded();
-  if (started || typeof Image === 'undefined') return;
-  started = true;
-  for (const name of names) {
-    const image = new Image();
-    image.onload = () => images.set(name, image);
-    image.src = `${import.meta.env.BASE_URL}assets/stations/${name}.png`;
-  }
+  for (const name of names) requestImage(`stations:${name}`, assetUrl(`assets/stations/${name}.png`));
 }
 interface StationState {
   station: string; elapsed: number; duration: number; heat: number;
@@ -35,10 +28,10 @@ export function drawStationLayers(ctx: CanvasRenderingContext2D, s: StationState
     grindstone: ['grind-backdrop', 'wheel'],
     quench: ['quench-backdrop', 'barrel-back', 'barrel-front', 'water-0', 'water-1', 'water-2', 'steam-0', 'steam-1', 'steam-2'],
   };
-  if (!needed[s.station].every(name => images.has(name)) ||
+  if (!needed[s.station].every(name => assetLoader.get(`stations:${name}`) !== null) ||
       !(['blade-hot', 'blade-shaped', 'blade-finished'] as const).every(name => getAnvilLayer(name))) return false;
   const draw = (name: Layer, x: number, y: number, w?: number, h?: number) => {
-    const im = images.get(name)!;
+    const im = assetLoader.get(`stations:${name}`)!;
     ctx.drawImage(im, Math.round(x), Math.round(y), w ?? im.width, h ?? im.height);
   };
   const workpiece = (heat: number, x: number, y: number, w: number, h: number, angle = 0) => {

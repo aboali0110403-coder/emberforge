@@ -345,7 +345,7 @@ test('backup recovery preserves valid battle results', () => {
 });
 
 test('defeat consequences and victory rewards stay consistent with existing rules', () => {
-  // Defeat with a D-grade weapon: -2 popularity, no materials.
+  // S4 defeat with a D-grade weapon: -5 reputation, no material/gold changes.
   const weakBattle = makePendingBattle({
     quality: 0.2,
     scenarioDifficulty: 400,
@@ -353,7 +353,7 @@ test('defeat consequences and victory rewards stay consistent with existing rule
   const lossResult = resolveBattleOutcome(weakBattle, () => 0.999);
   assert.equal(lossResult.won, false);
   assert.equal(lossResult.qualityGrade, 'D');
-  assert.equal(lossResult.popularityDelta, -2);
+  assert.equal(lossResult.popularityDelta, -5);
   assert.equal(lossResult.materialRewards.length, 0);
   assert.equal(lossResult.goldBonus, 0);
 
@@ -362,7 +362,7 @@ test('defeat consequences and victory rewards stay consistent with existing rule
   assert.equal(lossOutcome.claimed, true);
   assert.equal(
     lossOutcome.state.popularity.human,
-    Math.max(0, lossSave.popularity.human - 2),
+    Math.max(0, lossSave.popularity.human - 5),
   );
   assert.equal(lossOutcome.state.stats.battlesLost, 1);
   assert.equal(lossOutcome.state.stats.battlesWon, 0);

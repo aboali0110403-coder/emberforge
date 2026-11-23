@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ensurePaintedWeaponsPreloaded, subscribePaintedWeaponLoad } from '../gfx/paintedWeaponAssets';
+import { ensurePaintedWeaponsPreloaded } from '../gfx/paintedWeaponAssets';
 import {
   ensureAssetsPreloaded,
   getEquipmentSheetSprite,
@@ -23,12 +23,11 @@ import type {
 function useAssetRefresh(): number {
   const [version, setVersion] = useState(0);
   useEffect(() => {
-    ensureAssetsPreloaded();
     const refresh = () => setVersion((v) => v + 1);
     const unsubscribeAssets = subscribeAssetLoad(refresh);
-    const unsubscribePainted = subscribePaintedWeaponLoad(refresh);
+    ensureAssetsPreloaded();
     ensurePaintedWeaponsPreloaded();
-    return () => { unsubscribeAssets(); unsubscribePainted(); };
+    return () => { unsubscribeAssets(); };
   }, []);
   return version;
 }

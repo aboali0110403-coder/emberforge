@@ -1,3 +1,4 @@
+import { AssetLoadingStatus } from '../components/AssetLoadingStatus';
 import { ensureStationLayersPreloaded } from '../gfx/stationLayers';
 import React, { useEffect, useRef } from 'react';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../data/config';
@@ -12,6 +13,7 @@ import type {
   SaveState,
 } from '../types';
 import { getWorldCycle } from '../game/worldCycle';
+import { getSmithProgress } from '../data/config';
 import { advanceWorkshopNightMix, computeWalkPose } from './animation';
 import {
   createMinigameRuntime,
@@ -116,6 +118,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         forging.order.weapon.level,
         save.equipment,
         forging.order.weapon.type,
+        // S2: Smith level grants technique (GOOD-band assist) inside the
+        // station mechanics; see docs/s2-forging-redesign.md.
+        getSmithProgress(save.smithXp).level,
       );
     } else {
       minigameRef.current = null;
@@ -383,6 +388,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       data-testid="game-canvas-container"
       className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[#120c0a]"
     >
+      <AssetLoadingStatus />
       <canvas
         ref={canvasRef}
         width={CANVAS_WIDTH}

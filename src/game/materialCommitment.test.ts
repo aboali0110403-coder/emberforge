@@ -201,11 +201,11 @@ test('material commitment: reimbursement and each rounded fee component match pr
   save.conqueredTerritories[order.race] = ['first'];
   const { result, selected, zero } = assertParity(order, save, [{ materialId: 'human_common', units: 1 }]);
   assert.deepEqual(selected, {
-    totalGold: 134, baseGold: 111, materialReimbursement: 6,
+    totalGold: 132, baseGold: 111, materialReimbursement: 4,
     promptBonusGold: 11, territoryBonusGold: 6, unreinforcedApplied: false,
   });
   assert.equal(zero.totalGold, 95);
-  assert.equal(result.conditionalDeliveryFeeDifference, 39);
+  assert.equal(result.conditionalDeliveryFeeDifference, 37);
   assert.equal(result.currentSellBackValue, 9);
 });
 

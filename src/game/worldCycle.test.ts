@@ -1,3 +1,4 @@
+import { REPUTATION } from './reputation';
 import { projectDailyLedger } from './dailyLedger';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -63,7 +64,7 @@ function harness(state: SaveState, rendered = state) {
     saveRef: { current: state }, save: rendered,
     projectDailyLedger, ledgerObservation: { current: null },
     simulationUi: { current: { ...safeContext, forging: null } },
-    document: { hidden: false }, BALANCE: DEFAULT_BALANCE,
+    document: { hidden: false }, BALANCE: DEFAULT_BALANCE,REPUTATION,
     summonCooldownSec: 0, cooldown: 0,
     soundEngine: { playUiBlip() {} },
     setSummonCooldownSec: (value: any) => { env.cooldown = typeof value === 'function' ? value(env.cooldown) : value; },
@@ -137,7 +138,7 @@ test('actual App tick: dusk blocks arrival, preserves countdown and still expire
   const next = h.env.saveRef.current;
   assert.equal(next.activePlaySec, 480); assert.equal(next.nextCustomerTimerSec, 1);
   assert.equal(next.orders.length, 0); assert.equal(next.stats.ordersMissed, 1);
-  assert.equal(next.popularity.human, 15); assert.equal(h.writes.length, 1);
+  assert.equal(next.popularity.human, 25 - REPUTATION.missedOrder); assert.equal(h.writes.length, 1);
 });
 
 test('actual App tick: dawn permits at most one arrival and normal subsequent countdown', () => {

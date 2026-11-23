@@ -70,7 +70,7 @@ export const DEFAULT_BALANCE: BalanceConfig = {
   affinityOtherRace: 0.6,
   deliveryGoldBaseMult: 1.0,
   royalCommissionFeeMult: 2.2,
-  materialValueReimburseRatio: 0.32,
+  materialValueReimburseRatio: 0.24,
   unreinforcedLv3Penalty: 0.75,
   promptDeliveryBonusMult: 0.10,
   sellBackRatio: 0.50,

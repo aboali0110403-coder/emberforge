@@ -1,3 +1,5 @@
+import * as reputation from './reputation';
+import { REPUTATION } from './reputation';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -27,7 +29,7 @@ function order(s: SaveState, remainingSec: number, kind: 'standard' | 'royal' = 
   return { ...rules.createTutorialOrder(), id: 'o-' + remainingSec + '-' + kind + '-' + tutorial, kind, isTutorial: tutorial, remainingSec };
 }
 function tick(s: SaveState, paused = false, continuous = true) {
-  const d = paused ? null : advanceOrderDeadlines(s, 1, DEFAULT_BALANCE.popularityMissDeadlinePenalty);
+  const d = paused ? null : advanceOrderDeadlines(s, 1, REPUTATION.missedOrder);
   const after = { ...s, activePlaySec: s.activePlaySec + 1, orders: d?.orders ?? s.orders,
     popularity: d?.popularity ?? s.popularity,
     stats: { ...s.stats, ordersMissed: d?.ordersMissed ?? s.stats.ordersMissed, noMissStreak: d?.noMissStreak ?? s.stats.noMissStreak } };
@@ -35,7 +37,7 @@ function tick(s: SaveState, paused = false, continuous = true) {
   return { after: { ...after, dailyLedger: projectDailyLedger(s, after, context) }, context };
 }
 function skipped(s: SaveState, continuous = true) {
-  const result = skipNight(s, DEFAULT_BALANCE.popularityMissDeadlinePenalty);
+  const result = skipNight(s, REPUTATION.missedOrder);
   const context: DailyLedgerTransition = { kind: 'skip', expiredOrders: result.expiredOrders, continuous };
   return { ...result, context, state: { ...result.state, dailyLedger: projectDailyLedger(s, result.state, context) } };
 }
@@ -68,7 +70,7 @@ function harness(s: SaveState, observed = false) {
   const writes: SaveState[] = [], toasts: string[] = [];
   const noop = () => {};
   const env: Record<string, any> = {
-    ...rules, BALANCE, QUALITY_GRADE_META, getSmithProgress, ACHIEVEMENTS, advanceForgeStep,
+    ...rules,...reputation, BALANCE, QUALITY_GRADE_META, getSmithProgress, ACHIEVEMENTS, advanceForgeStep,
     projectDailyLedger, ledgerObservation: { current: observed ? s.dailyLedger : null },
     saveRef: { current: s }, save: s, autosaveElapsed: { current: 0 },
     simulationUi: { current: { screen: 'workshop', hidden: false, bgPaused: false, activeModal: null, forging: null, forgePaused: false } },
@@ -128,7 +130,7 @@ test('ledger delivery uses authoritative live day at second660, not stale render
 for (const kind of ['standard', 'royal'] as const) {
   for (const seconds of [658, 659]) {
     test(`ledger actual tick: ${kind} expiry at${seconds + 1} has exact day and unchanged consequences`, () => {
-      const s = fixture(seconds); s.orders = [order(s, 1, kind)]; const expected = advanceOrderDeadlines(s, 1, DEFAULT_BALANCE.popularityMissDeadlinePenalty);
+      const s = fixture(seconds); s.orders = [order(s, 1, kind)]; const expected = advanceOrderDeadlines(s, 1, REPUTATION.missedOrder);
       const h = harness(s, true); actualTick(h.env)(); const next = h.env.saveRef.current as SaveState;
       assert.equal(next.dailyLedger.current.dayIndex, seconds === 658 ? 1 : 2);
       assert.equal(next.dailyLedger.current.missed, 1); assert.equal(next.stats.ordersMissed, expected.ordersMissed);
@@ -166,7 +168,7 @@ test('ledger actual hidden tick is a no-op', () => {
 
 test('ledger actual Skip uses each89/90/91offset, chronological order, tutorial exclusion and unchanged gameplay', () => {
   const s = fixture(570); s.orders = [order(s, 90), order(s, 89, 'royal'), order(s, 91), order(s, 1, 'standard', true)];
-  const expected = skipNight(s, DEFAULT_BALANCE.popularityMissDeadlinePenalty).state;
+  const expected = skipNight(s, REPUTATION.missedOrder).state;
   const h = harness(s); callback('handleSkipNight', h.env)(); const next = h.env.saveRef.current as SaveState;
   assert.deepEqual(withoutLedger(next), withoutLedger(expected));
   assert.equal(next.dailyLedger.closed[0].dayIndex, 1); assert.equal(next.dailyLedger.closed[0].missed, 1);
@@ -233,7 +235,7 @@ test('ledger unrelated order removal is not inferred as a miss', () => {
 
 test('ledger repeated projection of same accepted transition including already-projected after is immutable/idempotent', () => {
   const s = fixture(570); s.orders = [order(s, 89), order(s, 90)];
-  const result = skipNight(s, DEFAULT_BALANCE.popularityMissDeadlinePenalty);
+  const result = skipNight(s, REPUTATION.missedOrder);
   const context: DailyLedgerTransition = { kind: 'skip', expiredOrders: result.expiredOrders, continuous: true };
   const original = structuredClone(s), afterOriginal = structuredClone(result.state);
   const first = projectDailyLedger(s, result.state, context), second = projectDailyLedger(s, { ...result.state, dailyLedger: first }, context);
@@ -295,4 +297,20 @@ test('ledger production hook scope remains exactly tick/Skip/delivery, with orig
   assert.equal((app.match(/window\.setInterval\(/g) ?? []).length, 1);
   assert.match(app, /cadence\.due \|\| orderExpiredOrArrived \|\| battleJustReady/);
   assert.match(readFileSync(new URL('./rules.ts', import.meta.url), 'utf8'), /const dailyLedger = obj\.version === 4/);
+});
+
+// S4 actual delivery callback lifecycle, distinct from historical accounting assertions.
+test('S4 actual delivery rewards earned kingdom tier once, never fresh high-level stock',()=>{
+ const s=fixture(100);s.kingLetters=[];s.popularity.human=50;
+ const h=harness(s);
+ h.env.rollWeaponLevelUp=(oldLevel:number)=>({newLevel:oldLevel===9?10:oldLevel,evaluation:{chance:1}});
+ const fresh={...order(s,200),id:'fresh',weapon:rules.createWeaponInstance('sword',15,'fresh')};
+ h.env.saveRef.current.orders=[fresh];delivery(h.env,fresh)({accuracy:.85,bestStreak:1});
+ assert.equal(h.env.saveRef.current.popularity.human,50);assert.equal(h.env.saveRef.current.kingLetters.length,0);
+ const earned={...order(s,200),id:'earned',weapon:rules.createWeaponInstance('sword',9,'earned')};
+ h.env.saveRef.current.orders=[earned];delivery(h.env,earned)({accuracy:.85,bestStreak:1});
+ assert.equal(h.env.saveRef.current.popularity.human,58);assert.equal(h.env.saveRef.current.kingLetters.length,1);
+ const next={...earned,id:'another',weapon:rules.createWeaponInstance('sword',9,'another')};
+ h.env.saveRef.current.orders=[next];delivery(h.env,next)({accuracy:.85,bestStreak:1});
+ assert.equal(h.env.saveRef.current.popularity.human,58);assert.equal(h.env.saveRef.current.kingLetters.length,2);
 });

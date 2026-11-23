@@ -1,3 +1,5 @@
+import { battleReputationDelta } from './reputation';
+import { relevantOrderToolTier, selectCapabilityOrderLevel } from './orderCapability';
 import { createDailyLedger, sanitizeDailyLedger } from './dailyLedger';
 import { ACHIEVEMENTS } from '../data/achievements';
 import { BALANCE, getStageMinRarity } from '../data/balance';
@@ -518,6 +520,7 @@ export function evaluateBattlePreview(params: {
 export function resolveBattleOutcome(
   pending: PendingBattle,
   rng: () => number = Math.random,
+  currentPopularity = 0,
 ): BattleResult {
   const breakdown = evaluateBattlePreview({
     weapon: pending.weapon,
@@ -552,14 +555,7 @@ export function resolveBattleOutcome(
   let goldBonus = 0;
 
   if (won) {
-    popularityDelta = Math.max(
-      2,
-      Math.round(
-        (BALANCE.popularityWinBase + pending.weapon.level * 1.4 + gradeMeta.popBonus) *
-          (0.6 + pending.quality * 0.6) *
-          (pending.wasRoyal ? 1.4 : 1.0),
-      ),
-    );
+    popularityDelta = battleReputationDelta(grade,true,Boolean(pending.wasRoyal),currentPopularity);
     if (pending.wasRoyal) {
       goldBonus = Math.round(45 + satisfaction * 0.9);
     } else if (grade === 'S' || grade === 'A') {
@@ -597,8 +593,8 @@ export function resolveBattleOutcome(
     for (const [materialId, count] of rewardMap.entries()) {
       materialRewards.push({ materialId, count });
     }
-  } else if (grade === 'D') {
-    popularityDelta = -2;
+  } else {
+    popularityDelta = battleReputationDelta(grade,false,Boolean(pending.wasRoyal),currentPopularity);
   }
 
   return {
@@ -625,11 +621,12 @@ export function resolveBattleOutcome(
 export function resolvePendingBattleResult(
   battle: PendingBattle,
   rng: () => number = Math.random,
+  currentPopularity = 0,
 ): PendingBattle {
   if (battle.resolvedResult && battle.resolvedResult.battleId === battle.id) {
     return battle;
   }
-  return { ...battle, resolvedResult: resolveBattleOutcome(battle, rng) };
+  return { ...battle, resolvedResult: resolveBattleOutcome(battle, rng,currentPopularity) };
 }
 
 export interface BattleClaimOutcome {
@@ -819,22 +816,13 @@ export function generateCustomerOrder(
   const weaponDefs = getWeaponsForRace(race);
   const weaponDef = pickRandom(weaponDefs, rng);
 
-  // Scale level gently with player progress & Smith Level
+  // S3 capability anchor, bounded experience, weapon-repertoire tools and material access.
   const smithLevel = getSmithProgress(state.smithXp).level;
-  const avgEquip =
-    Object.values(state.equipment).reduce((a, b) => a + b, 0) /
-    Object.values(state.equipment).length;
-  const maxSuggestedLevel = clamp(
-    Math.round(2 + state.stats.ordersCompleted * 0.32 + (avgEquip - 1) * 2.2 + (smithLevel - 1) * 0.4),
-    2,
-    18,
-  );
-  const minSuggestedLevel = clamp(maxSuggestedLevel - 4, 1, 14);
-  const level = clamp(
-    randInt(minSuggestedLevel, maxSuggestedLevel, rng),
-    minSuggestedLevel,
-    maxSuggestedLevel,
-  );
+  const level = selectCapabilityOrderLevel({
+    smithLevel, completedOrders: state.stats.ordersCompleted,
+    popularity: state.popularity[race], furnace: state.equipment.furnace,
+    relevantToolTier: relevantOrderToolTier(weaponDef.id,state.equipment),
+  }, rng());
 
   const weapon = createWeaponInstance(weaponDef.id, level, nextUid('wpn'));
   const scenario = pickRandom(raceDef.scenarios, rng);

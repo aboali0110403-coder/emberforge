@@ -33,6 +33,23 @@ import {
 } from '../game/forgeInsightReport';
 import { easeOutCubic, getWeaponHeatSpec } from './animation';
 
+// S2: single source of truth for the discrete-station PERFECT tolerances.
+// Scoring and the rendered indicators both use these so the UI cannot
+// misrepresent the mechanic.
+export const ANVIL_PERFECT_WINDOW = 0.008;
+export const QUENCH_PERFECT_TOL = 0.005;
+export const BIND_PERFECT_WINDOW = 0.018;
+// Pointer repositioning on the grindstone moves at a capped speed instead of
+// teleporting, so the mouse cannot bypass the tracking skill.
+export const GRIND_POINTER_SPEED = 1.2;
+// Fixed center precision earns the final 20% of continuous-station accuracy.
+// Upgrades widen the outer comfort zone only.
+export const CONTINUOUS_PRECISE_WIDTH = 0.04;
+export function quenchGoodTolerance(rt: Pick<MinigameRuntime, 'targetTempMin' | 'targetTempMax' | 'quenchTier' | 'smithLevel'>): number {
+  const half = (rt.targetTempMax - rt.targetTempMin) / 2;
+  return half * (1.15 + (rt.quenchTier - 1) * 0.1) + Math.max(0, Math.min(19, rt.smithLevel - 1)) * 0.004;
+}
+
 export interface MinigameFinishPayload {
   accuracy: number; // 0..1
   bestStreak: number;
@@ -64,7 +81,7 @@ export interface MinigameRuntime {
   heatVel: number;
   bandCenter: number;
   bandWidth: number;
-  inBandTime: number;
+  inBandTime: number; furnacePreciseTime: number;
   overheatSec: number;
   overheatWarnTimer: number;
   bellowsPumpAnim: number;
@@ -84,10 +101,11 @@ export interface MinigameRuntime {
   anvilTargetSpan: number;
   // Grindstone state
   cursorX: number; // 0..1
+  cursorTarget: number; // pointer-aimed position the cursor moves toward
   zoneCenter: number;
   zoneWidth: number;
   zoneDir: number;
-  grindInZoneTime: number;
+  grindInZoneTime: number; grindPreciseTime: number;
   pointerDown: boolean;
   // Quench state
   temp: number; // 1.0 -> 0.0
@@ -108,6 +126,10 @@ export interface MinigameRuntime {
   bindPulse: number; // 0..1
   bindScores: number[];
   bindFlashAnim: number;
+  // S2: context recorded on the runtime so scoring functions stay honest.
+  smithLevel: number;
+  diffScale: number;
+  quenchTier: number;
 }
 
 export function createMinigameRuntime(
@@ -115,12 +137,19 @@ export function createMinigameRuntime(
   weaponLevel: number,
   equipment: Record<EquipmentId, number>,
   weaponType: WeaponTypeId = 'sword',
+  smithLevel = 1,
 ): MinigameRuntime {
   const diffScale = Math.min(1, (weaponLevel - 1) / 18);
+  // S2: Smith level grants technique — a small, level-scaled widening of the
+  // GOOD tolerance bands only. It never widens PERFECT windows: mastery stays
+  // an execution outcome, progression makes GOOD more reliable.
+  const smithGoodAssist = Math.max(0, Math.min(19, smithLevel - 1)) * 0.004;
+  const smithBandAssist = Math.max(0, Math.min(19, smithLevel - 1)) * 0.0015;
   const fTier = equipment.furnace;
   const hTier = equipment.hammer;
   const gTier = equipment.grindstone;
   const qTier = equipment.quench;
+
 
   const rt: MinigameRuntime = {
     station,
@@ -143,8 +172,10 @@ export function createMinigameRuntime(
     heat: 0.45,
     heatVel: 0,
     bandCenter: 0.56,
-    bandWidth: 0.24 - diffScale * 0.055 + (fTier - 1) * 0.035,
-    inBandTime: 0,
+    // S2: deeper level scaling; equipment gives a small width bonus plus the
+    // stability effect below (comfort), not a trivially wide band.
+    bandWidth: 0.24 - diffScale * 0.075 + (fTier - 1) * 0.015 + smithBandAssist,
+    inBandTime: 0, furnacePreciseTime: 0,
     overheatSec: 0,
     overheatWarnTimer: 0,
     bellowsPumpAnim: 0,
@@ -165,10 +196,11 @@ export function createMinigameRuntime(
       spear: 100, cleaver: 44, axe: 26, scythe: 68, trident: 70 }[weaponType],
     // Grindstone
     cursorX: 0.5,
+    cursorTarget: 0.5,
     zoneCenter: 0.5,
-    zoneWidth: 0.28 - diffScale * 0.065 + (gTier - 1) * 0.04,
+    zoneWidth: 0.28 - diffScale * 0.075 + (gTier - 1) * 0.015 + smithBandAssist,
     zoneDir: 1,
-    grindInZoneTime: 0,
+    grindInZoneTime: 0, grindPreciseTime: 0,
     pointerDown: false,
     // Quench
     temp: 1.0,
@@ -187,10 +219,15 @@ export function createMinigameRuntime(
     fitMisses: 0,
     fitResults: [],
     bindBeatsDone: 0,
-    bindBeatsTotal: 6,
+    // S2: higher-level weapons demand more bind beats (level scaling, like the
+    // anvil's strike count).
+    bindBeatsTotal: 6 + Math.min(2, Math.floor(weaponLevel / 8)),
     bindPulse: 0,
     bindScores: [],
     bindFlashAnim: 0,
+    smithLevel,
+    diffScale,
+    quenchTier: qTier,
   };
 
   if (station === 'anvil') {
@@ -241,7 +278,7 @@ export function handleMinigamePointerDown(
   } else if (rt.station === 'anvil') {
     triggerAnvilStrike(rt, equipment, particles, cb);
   } else if (rt.station === 'grindstone') {
-    rt.cursorX = Math.max(0.08, Math.min(0.92, (wx - 110) / 260));
+    rt.cursorTarget = Math.max(0.08, Math.min(0.92, (wx - 110) / 260));
   } else if (rt.station === 'quench') {
     if (!rt.submerged) {
       rt.submerged = true;
@@ -306,7 +343,9 @@ export function handleMinigamePointerDown(
 export function handleMinigamePointerMove(rt: MinigameRuntime, wx: number): void {
   if (rt.finished) return;
   if (rt.station === 'grindstone') {
-    rt.cursorX = Math.max(0.08, Math.min(0.92, (wx - 110) / 260));
+    // S2: pointer input sets a target; the cursor approaches it at a capped
+    // speed in updateMinigame (no instant teleport bypass).
+    rt.cursorTarget = Math.max(0.08, Math.min(0.92, (wx - 110) / 260));
   }
 }
 
@@ -337,22 +376,27 @@ function triggerAnvilStrike(
   const dist = Math.abs(rt.ringProgress - targetAt);
   const hammerBonus = (equipment.hammer - 1) * 0.02;
   const anvilForgive = (equipment.anvil - 1) * 0.025;
+  // S2: Smith level widens the GOOD band only.
+  const smithGoodAssist = Math.max(0, Math.min(19, (rt.smithLevel ?? 1) - 1)) * 0.004;
 
+  // S2: PERFECT window is fixed and measured separately from the GOOD band;
+  // equipment and Smith level widen only the GOOD band (forgiveness), and the
+  // miss score is a flat 0.30 (no unconditional tier floor).
   let score = 0.25;
-  if (dist <= 0.11 + hammerBonus) {
+  if (dist <= ANVIL_PERFECT_WINDOW) {
     rt.streak += 1;
     rt.bestStreak = Math.max(rt.bestStreak, rt.streak);
     const streakBonus = rt.streak >= 3 ? 0.04 : 0;
     score = Math.min(1.04, 1.0 + streakBonus);
     rt.anvilStrikeQuality = 'perfect';
     triggerPopup(rt, 'perfect', rt.targetX, rt.targetY - 26);
-  } else if (dist <= 0.24 + hammerBonus + anvilForgive) {
+  } else if (dist <= 0.24 + hammerBonus + anvilForgive + smithGoodAssist) {
     score = 0.76;
     rt.streak = 0;
     rt.anvilStrikeQuality = 'good';
     triggerPopup(rt, 'good', rt.targetX, rt.targetY - 24);
   } else {
-    score = 0.30 + (equipment.anvil - 1) * 0.05;
+    score = 0.3;
     rt.streak = 0;
     rt.anvilStrikeQuality = 'miss';
     triggerPopup(rt, 'miss', rt.targetX, rt.targetY - 22);
@@ -378,8 +422,10 @@ function triggerWorkbenchBind(
 ): void {
   const dist = Math.abs(rt.bindPulse - 0.8);
   const wBonus = (equipment.workbench - 1) * 0.025;
+  // S2: Smith level widens the GOOD band only.
+  const smithGoodAssist = Math.max(0, Math.min(19, (rt.smithLevel ?? 1) - 1)) * 0.004;
   let score = 0.4;
-  if (dist <= 0.14 + wBonus) {
+  if (dist <= BIND_PERFECT_WINDOW) {
     score = 1.0;
     rt.streak += 1;
     rt.bestStreak = Math.max(rt.bestStreak, rt.streak);
@@ -390,7 +436,7 @@ function triggerWorkbenchBind(
     triggerPopup(rt, 'perfect', 240, 108);
     cb.onHitStop(0.035);
     cb.onShake(3);
-  } else if (dist <= 0.28 + wBonus) {
+  } else if (dist <= 0.28 + wBonus + smithGoodAssist) {
     score = 0.76;
     rt.streak = 0;
     rt.bindFlashAnim = 0.15;
@@ -427,7 +473,6 @@ function releaseQuench(
   rt.quenchDone = true;
   let judgment: QuenchJudgment;
   const mid = (rt.targetTempMin + rt.targetTempMax) / 2;
-  const half = (rt.targetTempMax - rt.targetTempMin) / 2;
   const dist = Math.abs(rt.temp - mid);
 
   if (rt.temp <= 0.04) {
@@ -436,7 +481,9 @@ function releaseQuench(
     rt.statusBanner = { text: 'BRITTLE OVER-COOL!', color: '#f87171' };
     soundEngine.playWarningTone();
     triggerPopup(rt, 'miss', 186, 108);
-  } else if (dist <= half * 0.42) {
+  } else if (dist <= QUENCH_PERFECT_TOL) {
+    // S2: PERFECT temper window is fixed (about +/-0.011-0.015s of cooling); tier and
+    // Smith level widen only the GOOD tolerance below.
     rt.accuracy = 1.0;
     judgment = 'perfect';
     rt.streak += 1;
@@ -446,7 +493,7 @@ function releaseQuench(
     particles.burstSteam(186, 150, 24);
     particles.spawnRing(186, 148, 34, '#fde047');
     triggerPopup(rt, 'perfect', 186, 108);
-  } else if (dist <= half * 1.15) {
+  } else if (dist <= quenchGoodTolerance(rt)) {
     rt.accuracy = 0.83;
     judgment = 'good';
     soundEngine.playQuenchHiss();
@@ -472,8 +519,10 @@ function finishMinigame(
   cb: MinigameCallbacks,
 ): void {
   if (rt.finished) return;
-  const anvilBonus = (equipment.anvil - 1) * 0.02;
-  rt.accuracy = Math.min(1, Math.max(0.22, rt.accuracy + anvilBonus));
+  void equipment;
+  // S2: the unconditional +2%/anvil-tier cross-station finish bonus is removed;
+  // equipment forgiveness now lives only in the per-station GOOD bands.
+  rt.accuracy = Math.min(1, Math.max(0.22, rt.accuracy));
   rt.finished = true;
   cb.onFinish({
     accuracy: rt.accuracy,
@@ -560,6 +609,7 @@ export function updateMinigame(
     rt.heat = Math.max(0.05, Math.min(0.99, rt.heat + rt.heatVel * dt));
     rt.bandCenter = 0.54 + Math.sin(rt.elapsed * 0.75) * 0.14;
     const dist = Math.abs(rt.heat - rt.bandCenter);
+    if (dist <= CONTINUOUS_PRECISE_WIDTH / 2) rt.furnacePreciseTime += dt;
     if (dist <= rt.bandWidth / 2) {
       rt.inBandTime += dt;
     }
@@ -583,7 +633,7 @@ export function updateMinigame(
     const scorchPenalty = Math.min(0.18, rt.overheatSec * 0.045);
     rt.accuracy = Math.max(
       0.18,
-      Math.min(1, 0.32 + (rt.inBandTime / Math.max(0.1, rt.elapsed)) * 0.68 - scorchPenalty),
+      Math.min(1, 0.32 + (rt.inBandTime / Math.max(0.1, rt.elapsed)) * 0.48 + (rt.furnacePreciseTime / Math.max(0.1, rt.elapsed)) * 0.20 - scorchPenalty),
     );
 
     if (rt.elapsed >= rt.duration) {
@@ -610,9 +660,17 @@ export function updateMinigame(
   } else if (rt.station === 'grindstone') {
     if (heldKeys.has('ArrowLeft') || heldKeys.has('a') || heldKeys.has('A')) {
       rt.cursorX = Math.max(0.08, rt.cursorX - 0.58 * dt);
+      rt.cursorTarget = rt.cursorX; // key input takes over the target
     }
     if (heldKeys.has('ArrowRight') || heldKeys.has('d') || heldKeys.has('D')) {
       rt.cursorX = Math.min(0.92, rt.cursorX + 0.58 * dt);
+      rt.cursorTarget = rt.cursorX;
+    }
+    // S2: capped pointer tracking (no teleport bypass).
+    if (rt.cursorTarget !== rt.cursorX) {
+      const step = GRIND_POINTER_SPEED * dt;
+      const dx = rt.cursorTarget - rt.cursorX;
+      rt.cursorX = Math.abs(dx) <= step ? rt.cursorTarget : rt.cursorX + Math.sign(dx) * step;
     }
 
     rt.zoneCenter += rt.zoneDir * (0.24 + Math.sin(rt.elapsed) * 0.06) * dt;
@@ -650,7 +708,8 @@ export function updateMinigame(
     } else {
       rt.statusBanner = { text: 'ALIGN TO GREEN ZONE!', color: '#fbbf24' };
     }
-    rt.accuracy = Math.min(1, 0.30 + (rt.grindInZoneTime / Math.max(0.1, rt.elapsed)) * 0.70);
+    if (Math.abs(rt.cursorX - rt.zoneCenter) <= CONTINUOUS_PRECISE_WIDTH / 2) rt.grindPreciseTime += dt;
+    rt.accuracy = Math.min(1, 0.30 + (rt.grindInZoneTime / Math.max(0.1, rt.elapsed)) * 0.50 + (rt.grindPreciseTime / Math.max(0.1, rt.elapsed)) * 0.20);
 
     if (rt.elapsed >= rt.duration) {
       finishMinigame(rt, equipment, cb);
@@ -665,9 +724,10 @@ export function updateMinigame(
         particles.spawnRing(186, 156, 26, '#7dd3fc');
       }
       rt.quenchPlunge = Math.min(1, rt.quenchPlunge + dt * 5.2);
-      rt.temp = Math.max(0.02, rt.temp - 0.34 * dt);
-      if (rt.temp >= rt.targetTempMin && rt.temp <= rt.targetTempMax) {
-        rt.statusBanner = { text: 'IN SWEET SPOT — RELEASE NOW!', color: '#4ade80' };
+      // S2: cooling rate scales with weapon level (quench had no level scaling).
+      rt.temp = Math.max(0.02, rt.temp - (0.34 + ((rt.diffScale ?? 0) * 0.1)) * dt);
+      if (Math.abs(rt.temp - (rt.targetTempMin + rt.targetTempMax) / 2) <= quenchGoodTolerance(rt)) {
+        rt.statusBanner = { text: 'GOOD BAND: CENTER FOR PERFECT', color: '#4ade80' };
       } else if (rt.temp < rt.targetTempMin) {
         rt.statusBanner = { text: 'TOO COLD — RELEASE SOON!', color: '#f87171' };
       } else {
@@ -682,9 +742,15 @@ export function updateMinigame(
     } else if (rt.submerged && !rt.quenchDone) {
       releaseQuench(rt, particles, cb);
     }
+    // S2: the configured quench duration is now enforced; holding too long
+    // releases (and likely over-cools), never stalling the forge.
+    if (!rt.quenchDone && rt.elapsed >= rt.duration) {
+      releaseQuench(rt, particles, cb);
+    }
   } else if (rt.station === 'workbench') {
     if (rt.wbPhase === 'bind') {
-      rt.bindPulse += 0.92 * dt;
+      // S2: bind pulse speed scales with weapon level (workbench had none).
+      rt.bindPulse += (0.92 + ((rt.diffScale ?? 0) * 0.25)) * dt;
       if (rt.bindPulse >= 1.15) {
         rt.streak = 0;
         cb.onStreak(0);
@@ -911,10 +977,15 @@ export function renderMinigameScene(
     ctx.fillRect(bandX, gy + 2, bandW, 3);
     ctx.fillRect(bandX, gy + gh - 5, bandW, 3);
 
+    ctx.fillStyle = 'rgba(253, 224, 71, 0.65)';
+    ctx.fillRect(gx + (rt.bandCenter - CONTINUOUS_PRECISE_WIDTH / 2) * gw, gy + 2, CONTINUOUS_PRECISE_WIDTH * gw, gh - 4);
     const needleX = gx + rt.heat * gw;
     ctx.fillStyle = rt.heat > 0.87 ? '#f87171' : '#fffbeb';
     ctx.fillRect(needleX - 2, gy - 4, 4, gh + 8);
 
+    ctx.fillStyle = '#fde047';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('CENTER STRIPE: PRECISION BONUS', 110, 228);
     const pct = Math.min(1, rt.elapsed / rt.duration);
     ctx.fillStyle = '#362d2b';
     ctx.fillRect(gx, 136, gw, 12);
@@ -965,7 +1036,7 @@ export function renderMinigameScene(
     }
 
     const rCurrent = Math.max(4, (1.15 - rt.ringProgress) * 34);
-    ctx.strokeStyle = Math.abs(rt.ringProgress - 0.85) <= 0.12 ? '#fde047' : '#fffbeb';
+    ctx.strokeStyle = Math.abs(rt.ringProgress - 0.85) <= ANVIL_PERFECT_WINDOW ? '#fde047' : '#fffbeb';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(rt.targetX, rt.targetY, rCurrent, 0, Math.PI * 2);
@@ -1091,10 +1162,15 @@ export function renderMinigameScene(
     ctx.lineWidth = 1.5;
     ctx.strokeRect(zx, ty + 4, zw, th - 8);
 
+    ctx.fillStyle = 'rgba(253, 224, 71, 0.5)';
+    ctx.fillRect(tx + (rt.zoneCenter - CONTINUOUS_PRECISE_WIDTH / 2) * tw, ty + 4, CONTINUOUS_PRECISE_WIDTH * tw, th - 8);
     const cx = tx + rt.cursorX * tw;
     ctx.fillStyle = '#fde047';
     ctx.fillRect(cx - 3, ty - 4, 6, th + 8);
 
+    ctx.fillStyle = '#fde047';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('CENTER STRIPE: PRECISION BONUS', 110, 228);
     const pct = Math.min(1, rt.elapsed / rt.duration);
     ctx.fillStyle = '#362d2b';
     ctx.fillRect(tx, 202, tw, 10);
@@ -1170,22 +1246,35 @@ export function renderMinigameScene(
     ctx.lineWidth = 1;
     ctx.strokeRect(vx - 0.5, vy - 0.5, 27, vh + 1);
 
-    const minY = vy + (1 - rt.targetTempMax) * vh;
-    const maxY = vy + (1 - rt.targetTempMin) * vh;
+    const temperMid = (rt.targetTempMin + rt.targetTempMax) / 2;
+    const goodTolerance = quenchGoodTolerance(rt);
+    const minY = vy + (1 - Math.min(1, temperMid + goodTolerance)) * vh;
+    const maxY = vy + (1 - Math.max(0.04, temperMid - goodTolerance)) * vh;
     ctx.fillStyle = '#38bdf8';
     ctx.fillRect(vx + 2, minY, 22, maxY - minY);
-    ctx.fillStyle = '#fde047';
+    ctx.fillStyle = '#7dd3fc';
     ctx.fillRect(vx + 2, minY, 22, 2);
     ctx.fillRect(vx + 2, maxY - 2, 22, 2);
+    // S2: the narrow PERFECT temper band is drawn so the target matches the
+    // actual scoring tolerance (QUENCH_PERFECT_TOL around the window mid).
+    {
+      const midY = vy + (1 - (rt.targetTempMin + rt.targetTempMax) / 2) * vh;
+      const ph = QUENCH_PERFECT_TOL * vh;
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(vx + 2, midY - ph, 22, ph * 2);
+    }
 
     const fillY = vy + (1 - rt.temp) * vh;
     ctx.fillStyle = rt.temp > 0.5 ? '#ea580c' : '#bae6fd';
     ctx.fillRect(vx + 7, fillY, 12, vy + vh - fillY - 2);
+    // Keep the exact narrow precision stripe visible over the temperature fill.
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(vx + 2, vy + (1 - temperMid - QUENCH_PERFECT_TOL) * vh, 22, QUENCH_PERFECT_TOL * vh * 2);
 
     ctx.fillStyle = '#f6e7cb';
     ctx.font = 'bold 9px "Courier New", monospace';
     ctx.fillText(
-      rt.submerged ? 'RELEASE IN BLUE BAND!' : 'HOLD TO SUBMERGE BLADE',
+      rt.submerged ? 'BLUE: GOOD / YELLOW: PERFECT' : 'HOLD TO SUBMERGE BLADE',
       processFrame || layeredScene ? 214 : 166,
       processFrame || layeredScene ? 214 : 78,
     );
@@ -1287,7 +1376,7 @@ export function renderMinigameScene(
       }
 
       const outerR = Math.max(4, (1.1 - rt.bindPulse) * 40);
-      ctx.strokeStyle = Math.abs(rt.bindPulse - 0.8) <= 0.14 ? '#4ade80' : '#fde047';
+      ctx.strokeStyle = Math.abs(rt.bindPulse - 0.8) <= BIND_PERFECT_WINDOW ? '#4ade80' : '#fde047';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(rx, ry, outerR, 0, Math.PI * 2);

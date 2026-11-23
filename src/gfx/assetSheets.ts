@@ -1,3 +1,4 @@
+import { assetLoader, assetUrl, requestImage } from './assetLoader';
 import { HAIR_COLORS, OUTFIT_COLORS, SKIN_TONES } from '../data/config';
 import type {
   EquipmentId,
@@ -16,66 +17,36 @@ export interface CropRect {
 }
 
 export const ASSET_PATHS = {
-  portraits16: './assets/aistudio/Gemini_Generated_Image_3lnh4y3lnh4y3lnh_f30c433a.jfif',
-  portraits5: './assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__2__df5a6c58.jfif',
-  kings5: './assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__3__c61fe9db.jfif',
-  mixedWeapons: './assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__1__f46350f3.jfif',
-  forgeUi: './assets/aistudio/Gemini_Generated_Image_rcbthrcbthrcbthr__1__2cdcb958.jfif',
-  icons15: './assets/aistudio/Gemini_Generated_Image_v9haxuv9haxuv9ha_61afac88.jfif',
-  weaponsA: './assets/aistudio/Gemini_Generated_Image_verhr1verhr1verh__1__a01853ef.jfif',
-  weaponsB: './assets/aistudio/Gemini_Generated_Image_verhr1verhr1verh_eebccb49.jfif',
-  equipment: './assets/aistudio/Gemini_Generated_Image_v9haxuv9haxuv9ha__1__5addd03b.jfif',
-  vfx9: './assets/aistudio/Gemini_Generated_Image_rcbthrcbthrcbthr_6b92715f.jfif',
-  playerSheet: './assets/aistudio/Gemini_Generated_Image_rcbthrcbthrcbthr__2__14fbd82c.jfif',
-  workshopBg: './assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__5__b083e146.jfif',
-  worldMap: './assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__4__9bd21ea9.jfif',
-  battleHuman: './assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods_e144a380.jfif',
-  battleElf: './assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk__3__87723133.jfif',
-  battleGoblin: './assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk__2__8088079b.jfif',
-  battleOrc: './assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk__1__1b5ba3c7.jfif',
-  battleDemon: './assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk_66664de1.jfif',
+  portraits16: assetUrl('./assets/aistudio/Gemini_Generated_Image_3lnh4y3lnh4y3lnh_f30c433a.jfif'),
+  portraits5: assetUrl('./assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__2__df5a6c58.jfif'),
+  kings5: assetUrl('./assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__3__c61fe9db.jfif'),
+  mixedWeapons: assetUrl('./assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__1__f46350f3.jfif'),
+  forgeUi: assetUrl('./assets/aistudio/Gemini_Generated_Image_rcbthrcbthrcbthr__1__2cdcb958.jfif'),
+  icons15: assetUrl('./assets/aistudio/Gemini_Generated_Image_v9haxuv9haxuv9ha_61afac88.jfif'),
+  weaponsA: assetUrl('./assets/aistudio/Gemini_Generated_Image_verhr1verhr1verh__1__a01853ef.jfif'),
+  weaponsB: assetUrl('./assets/aistudio/Gemini_Generated_Image_verhr1verhr1verh_eebccb49.jfif'),
+  equipment: assetUrl('./assets/aistudio/Gemini_Generated_Image_v9haxuv9haxuv9ha__1__5addd03b.jfif'),
+  vfx9: assetUrl('./assets/aistudio/Gemini_Generated_Image_rcbthrcbthrcbthr_6b92715f.jfif'),
+  playerSheet: assetUrl('./assets/aistudio/Gemini_Generated_Image_rcbthrcbthrcbthr__2__14fbd82c.jfif'),
+  workshopBg: assetUrl('./assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__5__b083e146.jfif'),
+  worldMap: assetUrl('./assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods__4__9bd21ea9.jfif'),
+  battleHuman: assetUrl('./assets/aistudio/Gemini_Generated_Image_kodsrvkodsrvkods_e144a380.jfif'),
+  battleElf: assetUrl('./assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk__3__87723133.jfif'),
+  battleGoblin: assetUrl('./assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk__2__8088079b.jfif'),
+  battleOrc: assetUrl('./assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk__1__1b5ba3c7.jfif'),
+  battleDemon: assetUrl('./assets/aistudio/Gemini_Generated_Image_oaxk7qoaxk7qoaxk_66664de1.jfif'),
 } as const;
 
 export type AssetSheetKey = keyof typeof ASSET_PATHS;
 
-const loadedImages = new Map<AssetSheetKey, HTMLImageElement>();
 const spriteCache = new Map<string, HTMLCanvasElement>();
-const listeners = new Set<() => void>();
-let preloadStarted = false;
-
-export function subscribeAssetLoad(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-function notifyListeners(): void {
-  for (const cb of listeners) {
-    cb();
-  }
-}
-
+export const subscribeAssetLoad = assetLoader.subscribe;
 export function ensureAssetsPreloaded(): void {
-  if (preloadStarted || typeof Image === 'undefined') return;
-  preloadStarted = true;
-  (Object.keys(ASSET_PATHS) as AssetSheetKey[]).forEach((key) => {
-    const img = new Image();
-    img.onload = () => {
-      loadedImages.set(key, img);
-      notifyListeners();
-    };
-    img.src = ASSET_PATHS[key];
-  });
+  for (const key of Object.keys(ASSET_PATHS) as AssetSheetKey[]) requestImage(`sheet:${key}`, ASSET_PATHS[key]);
 }
-
 export function getLoadedSheet(key: AssetSheetKey): HTMLImageElement | null {
   ensureAssetsPreloaded();
-  const img = loadedImages.get(key);
-  if (img && img.complete && img.naturalWidth > 0) {
-    return img;
-  }
-  return null;
+  return assetLoader.get(`sheet:${key}`);
 }
 
 function makeCanvas(w: number, h: number, willReadFrequently = false): HTMLCanvasElement {

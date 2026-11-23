@@ -320,7 +320,7 @@ test('V0.3 App integration keeps one interval, ref-based updates, event saves an
   assert.match(app, /const prev = saveRef\.current;[\s\S]*?const next = updater\(prev\);[\s\S]*?publishSave\(next\);[\s\S]*?persistCurrent\(next\);/);
   assert.match(app, /if \(result\.status !== 'failed'\) \{\s*autosaveElapsed\.current = 0;/);
   assert.match(app, /if \(!prev \|\| document\.hidden\) return;/);
-  assert.match(app, /resolvePendingBattleResult\(\{ \.\.\.b, etaSec: 0, ready: true \}\)/);
+  assert.match(app, /resolvePendingBattleResult\(\{ \.\.\.b, etaSec: 0, ready: true \},Math.random,prev.popularity\[b.race\]\)/);
   assert.match(app, /cadence\.due \|\| orderExpiredOrArrived \|\| battleJustReady/);
   assert.match(app, /\[screen, bgPaused, showToast, publishSave, persistCurrent\]/);
   assert.doesNotMatch(app, /beforeunload/);

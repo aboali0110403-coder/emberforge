@@ -1,3 +1,4 @@
+import { assetLoader, assetUrl, requestImage } from './assetLoader';
 import type { StationId } from '../types';
 
 /**
@@ -15,8 +16,6 @@ const FILE_NAME: Record<ProcessStation, string> = {
   quench: 'quench',
 };
 
-const images = new Map<string, HTMLImageElement>();
-let started = false;
 
 export function isProcessStation(id: StationId): id is ProcessStation {
   return id === 'furnace' || id === 'anvil' || id === 'grindstone' || id === 'quench';
@@ -27,21 +26,15 @@ function key(station: ProcessStation, frame: number): string {
 }
 
 export function ensureProcessFramesPreloaded(): void {
-  if (started || typeof Image === 'undefined') return;
-  started = true;
-  (Object.keys(FILE_NAME) as ProcessStation[]).forEach((station) => {
-    for (let frame = 1; frame <= 3; frame++) {
-      const img = new Image();
-      img.onload = () => images.set(key(station, frame), img);
-      img.src = `./assets/process/process-${FILE_NAME[station]}-${frame}.png`;
-    }
-  });
+  for (const station of Object.keys(FILE_NAME) as ProcessStation[]) {
+    for (let frame = 1; frame <= 3; frame++) requestImage(`process:${key(station, frame)}`, assetUrl(`assets/process/process-${FILE_NAME[station]}-${frame}.png`));
+  }
 }
 
 /** frame is 1..3. Returns null until that image has loaded. */
 export function getProcessFrame(station: ProcessStation, frame: 1 | 2 | 3): HTMLImageElement | null {
   ensureProcessFramesPreloaded();
-  const img = images.get(key(station, frame));
+  const img = assetLoader.get(`process:${key(station, frame)}`);
   return img && img.complete && img.naturalWidth > 0 ? img : null;
 }
 

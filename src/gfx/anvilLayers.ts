@@ -1,3 +1,4 @@
+import { assetLoader, assetUrl, requestImage } from './assetLoader';
 import type { WeaponInstance } from '../types';
 import { drawPaintedWorkpiece } from './paintedWeapons';
 
@@ -5,24 +6,16 @@ import { drawPaintedWorkpiece } from './paintedWeapons';
 const names = ['backdrop', 'blade-hot', 'blade-shaped', 'blade-finished',
   'hammer-raised', 'hammer-fall', 'hammer-impact', 'sparks', 'grip', 'guard', 'pommel'] as const;
 type Layer = typeof names[number];
-const images = new Map<Layer, HTMLImageElement>();
-let started = false;
 export const ANVIL_SWING_SECONDS = 0.32;
 export const ANVIL_IMPACT_AT = 0.09;
 
 export function ensureAnvilLayersPreloaded(): void {
-  if (started || typeof Image === 'undefined') return;
-  started = true;
-  for (const name of names) {
-    const image = new Image();
-    image.onload = () => images.set(name, image);
-    image.src = `${import.meta.env.BASE_URL}assets/anvil/${name}.png`;
-  }
+  for (const name of names) requestImage(`anvil:${name}`, assetUrl(`assets/anvil/${name}.png`));
 }
 
 export function getAnvilLayer(name: Layer): HTMLImageElement | null {
   ensureAnvilLayersPreloaded();
-  return images.get(name) ?? null;
+  return assetLoader.get(`anvil:${name}`) ?? null;
 }
 
 export interface AnvilLayerState {
@@ -43,9 +36,9 @@ export function drawAnvilLayers(
   weapon: WeaponInstance,
 ): boolean {
   ensureAnvilLayersPreloaded();
-  if (!names.every(name => images.has(name))) return false;
+  if (!names.every(name => assetLoader.get(`anvil:${name}`) !== null)) return false;
   const draw = (name: Layer, x: number, y: number, w?: number, h?: number) => {
-    const image = images.get(name)!;
+    const image = assetLoader.get(`anvil:${name}`)!;
     ctx.drawImage(image, Math.round(x), Math.round(y), w ?? image.width, h ?? image.height);
   };
   ctx.save();
@@ -79,7 +72,7 @@ export function drawAnvilLayers(
 /** Hammer stays above the timing overlay so contact reads clearly. */
 export function drawAnvilHammer(ctx: CanvasRenderingContext2D, rt: AnvilLayerState): void {
   const draw = (name: Layer, x: number, y: number, w?: number, h?: number) => {
-    const image = images.get(name);
+    const image = assetLoader.get(`anvil:${name}`);
     if (image) ctx.drawImage(image, Math.round(x), Math.round(y), w ?? image.width, h ?? image.height);
   };
   const active = rt.hammerStrikeAnim > 0;

@@ -80,11 +80,11 @@ const scenarios: Record<
   { station: StationId; accuracy: number; bestStreak: number; script: (h: Harness) => void }
 > = {
   furnace_ride: {
-    station: 'furnace', accuracy: 1, bestStreak: 0,
+    station: 'furnace', accuracy: 0.9837953091684435, bestStreak: 0,
     script: (h) => untilDone(h, () => { h.rt.pointerDown = h.rt.heat < h.rt.bandCenter; h.tick(0.016); }),
   },
   furnace_idle: {
-    station: 'furnace', accuracy: 0.32797441364605545, bestStreak: 0,
+    station: 'furnace', accuracy: 0.32562899786780386, bestStreak: 0,
     script: (h) => untilDone(h, () => h.tick(0.016)),
   },
   anvil_mixed: {
@@ -99,11 +99,11 @@ const scenarios: Record<
     },
   },
   grind_follow: {
-    station: 'grindstone', accuracy: 1, bestStreak: 0,
+    station: 'grindstone', accuracy: 0.9032, bestStreak: 0,
     script: (h) => untilDone(h, () => { h.rt.cursorX = h.rt.zoneCenter; h.tick(0.016); }),
   },
   grind_idle: {
-    station: 'grindstone', accuracy: 0.622, bestStreak: 0,
+    station: 'grindstone', accuracy: 0.5432, bestStreak: 0,
     script: (h) => untilDone(h, () => h.tick(0.016)),
   },
   quench_perfect: {
@@ -123,7 +123,9 @@ const scenarios: Record<
     script: (h) => { h.down(186, 152); h.tick(0.016); h.up(); },
   },
   workbench_mixed: {
-    station: 'workbench', accuracy: 0.7433333333333333, bestStreak: 3,
+    // S2: bind PERFECT window tightened (0.14 -> 0.09); the scripted 0.9 pulse
+    // now scores GOOD. Mean: (1+1+0.76+0.76+0.38+0.32)/6 = 0.70333...
+    station: 'workbench', accuracy: 0.7033333333333333, bestStreak: 2,
     script: (h) => {
       h.down(400, 60); // deliberate fit miss away from every slot
       h.down(0, 0, true); h.down(0, 0, true); h.down(0, 0, true); // keyboard fits
@@ -144,11 +146,11 @@ const OBSERVED_KEYS = new Set([
 ]);
 
 for (const [name, s] of Object.entries(scenarios)) {
-  test(`seeded ${name}: report equals stored runtime data, accuracy byte-identical to V2`, () => {
+  test(`seeded ${name}: report equals stored runtime data, accuracy matches documented S2 mechanics`, () => {
     const h = run(s.station, 1, s.script);
     const payload = h.payload()!;
     assert.equal(h.finishes(), 1, 'emission-once on the extended payload path');
-    assert.equal(payload.accuracy, s.accuracy, 'seeded accuracy byte-identical to V2 baseline');
+    assert.equal(payload.accuracy, s.accuracy, 'seeded accuracy matches documented S2 mechanics baseline');
     assert.equal(payload.bestStreak, s.bestStreak, 'seeded bestStreak byte-identical to V2 baseline');
 
     const report = payload.insight;
@@ -293,8 +295,9 @@ test('workbench fit attempts record one actual outcome per attempt at the decisi
     untilDone(hh, () => hh.tick(0.02));
   });
   const payload = h.payload()!;
-  assert.equal(payload.accuracy, 0.7433333333333333, 'fit recording does not alter accuracy');
-  assert.equal(payload.bestStreak, 3, 'fit recording does not alter best streak');
+  // S2: same recomputed mean as the seeded scenario above.
+  assert.equal(payload.accuracy, 0.7033333333333333, 'fit recording does not alter accuracy');
+  assert.equal(payload.bestStreak, 2, 'fit recording does not alter best streak');
   const report = payload.insight!;
   const byKey = new Map(report.entries.map((e) => [e.key, e]));
   assert.deepEqual(

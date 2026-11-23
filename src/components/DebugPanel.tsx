@@ -20,7 +20,6 @@ const NUMERIC_KEYS: (keyof BalanceConfig)[] = [
   'affinityTargetRace',
   'affinityGeneralWeapon',
   'affinityOtherRace',
-  'popularityWinBase',
   'furnaceDurationSec',
   'grindstoneDurationSec',
   'quenchDurationSec',

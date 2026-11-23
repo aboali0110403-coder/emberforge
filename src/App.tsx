@@ -1,3 +1,4 @@
+import { REPUTATION, deliveryReputationDelta, earnedLegendaryCrossing, earnedMilestoneReputation } from './game/reputation';
 import { projectDailyLedger } from './game/dailyLedger';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { soundEngine } from './audio/soundEngine';
@@ -28,7 +29,6 @@ import {
   applyForgeUpgradesToWeapon,
   calculateDeliveryGoldBreakdown,
   calculateForgeXp,
-  checkLegendaryMilestone,
   checkProgressiveUnlocks,
   createInitialSaveState,
   createKingLetter,
@@ -301,14 +301,14 @@ export default function App() {
 
       const advancedPlaySec = prev.activePlaySec + 1;
       if (!deadlinesPaused) {
-        const deadlines = advanceOrderDeadlines(prev, 1, BALANCE.popularityMissDeadlinePenalty);
+        const deadlines = advanceOrderDeadlines(prev, 1, REPUTATION.missedOrder);
         expiredOrders = deadlines.expiredOrders;
         nextOrders = deadlines.orders;
         nextPop = deadlines.popularity;
         nextMissed = deadlines.ordersMissed;
         nextNoMissStreak = deadlines.noMissStreak;
         for (const ord of deadlines.expiredOrders) {
-          showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
+          showToast(`Missed deadline: ${ord.customerName} (-${REPUTATION.missedOrder} Rep)`);
         }
 
         // Night closes creation only, never the existing deadline processing.
@@ -334,7 +334,7 @@ export default function App() {
         battleJustReady = true;
         // Resolve the outcome exactly once, at the readiness transition,
         // and persist it together with the ready state (autosave below).
-        return resolvePendingBattleResult({ ...b, etaSec: 0, ready: true });
+        return resolvePendingBattleResult({ ...b, etaSec: 0, ready: true },Math.random,prev.popularity[b.race]);
       });
 
       let rotTimer = prev.rotatingStockTimerSec - 1;
@@ -547,7 +547,7 @@ export default function App() {
       // never persisted (crash between ticks); it resolves once and persists.
       let result = ready.resolvedResult;
       if (!result || result.battleId !== ready.id) {
-        const resolved = resolveBattleOutcome(ready);
+        const resolved = resolveBattleOutcome(ready,Math.random,curSave.popularity[ready.race]);
         result = resolved;
         commitSave((prev) => {
           const idx = prev.pendingBattles.findIndex((b) => b.id === ready.id);
@@ -608,7 +608,7 @@ export default function App() {
     if (!live || !isSkipNightAvailable(live.activePlaySec, {
       ...ui, hidden: document.hidden, forging: ui.forging !== null,
     })) return;
-    const skipped = skipNight(live, BALANCE.popularityMissDeadlinePenalty);
+    const skipped = skipNight(live, REPUTATION.missedOrder);
     if (skipped.skippedSec === 0) return;
     const next = {
       ...skipped.state,
@@ -621,7 +621,7 @@ export default function App() {
     publishSave(next);
     persistCurrent(next);
     for (const ord of skipped.expiredOrders) {
-      showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
+      showToast(`Missed deadline: ${ord.customerName} (-${REPUTATION.missedOrder} Rep)`);
     }
   }, [publishSave, persistCurrent, showToast]);
 
@@ -734,7 +734,7 @@ export default function App() {
       const smithLevelBefore = getSmithProgress(curSave.smithXp).level;
       const smithLevelAfter = getSmithProgress(curSave.smithXp + xpEarned).level;
 
-      const milestone = checkLegendaryMilestone(upgradedWeapon);
+      const milestone = earnedLegendaryCrossing(oldLevel,upgradedWeapon);
       if (milestone !== null) {
         upgradedWeapon.legendaryNotifiedLevels = [
           ...upgradedWeapon.legendaryNotifiedLevels,
@@ -749,7 +749,8 @@ export default function App() {
 
       let newlyUnlockedAch: string[] = [];
       let letterForModal: KingLetter | null = null;
-      const reputationPenalty = qualityGrade === 'D' ? gradeMeta.popBonus : 0;
+      const reputationPenalty = deliveryReputationDelta(qualityGrade);
+      let milestonePopBonus = 0;
 
       commitSave((prev) => {
         const nextInv = { ...prev.inventory };
@@ -775,7 +776,8 @@ export default function App() {
         let nextLegCount = prev.stats.legendaryWeaponsForged;
 
         if (milestone !== null) {
-          nextPop[ord.race] = nextPop[ord.race] + BALANCE.legendaryPopBonus;
+          milestonePopBonus = earnedMilestoneReputation(ord.race,milestone,prev.kingLetters);
+          nextPop[ord.race] = nextPop[ord.race] + milestonePopBonus;
           letterForModal = createKingLetter(
             ord.race,
             prev.player.name,
@@ -916,7 +918,7 @@ export default function App() {
           order: updatedOrder,
           milestone,
           letter: letterForModal,
-          popBonus: BALANCE.legendaryPopBonus,
+          popBonus: milestonePopBonus,
         });
       }
 

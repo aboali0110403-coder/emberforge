@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { BALANCE } from '../data/balance';
 import { CANVAS_HEIGHT, CANVAS_WIDTH, POPULARITY_TIERS } from '../data/config';
 import { RACES, RACE_LIST } from '../data/races';
 import { getPopularityTier } from '../game/rules';
-import { ASSET_PATHS } from '../gfx/assetSheets';
+import { getLoadedSheet } from '../gfx/assetSheets';
+import { assetLoader } from '../gfx/assetLoader';
 import type { KingLetter, RaceId, SaveState } from '../types';
 import { HudIconSprite, PortraitSprite } from './PixelThumbnail';
 
@@ -21,6 +22,13 @@ const MAP_PINS: { id: RaceId; left: string; top: string; nx: number; ny: number 
 ];
 
 export const KingdomMapModal: React.FC<KingdomMapModalProps> = ({ save, onClose }) => {
+  const assetVersion = useSyncExternalStore(assetLoader.subscribe, assetLoader.getVersion, assetLoader.getVersion);
+  const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = mapCanvasRef.current; const image = getLoadedSheet('worldMap');
+    const ctx = canvas?.getContext('2d');
+    if (canvas && ctx && image) { canvas.width = image.naturalWidth; canvas.height = image.naturalHeight; ctx.drawImage(image, 0, 0); }
+  }, [assetVersion]);
   const [selectedLetter, setSelectedLetter] = useState<KingLetter | null>(null);
   const [selectedRace, setSelectedRace] = useState<RaceId>('human');
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -151,11 +159,8 @@ export const KingdomMapModal: React.FC<KingdomMapModalProps> = ({ save, onClose 
 
         {/* Interactive Pixel-Art World Map */}
         <div className="relative aspect-video w-full shrink-0 overflow-hidden border-2 border-[#6b4931] bg-[#17100d]">
-          <img
-            src={ASSET_PATHS.worldMap}
-            alt="Map of the Five Kingdoms"
-            className="block h-full w-full object-cover"
-          />
+          {!assetLoader.get('sheet:worldMap') && <span className="absolute left-2 top-2 font-pixel text-xs text-[#e8d0a8]">Map art unavailable · Preview. Use asset retry after closing.</span>}
+          <canvas ref={mapCanvasRef} role="img" aria-label="Map of the Five Kingdoms" className="block h-full w-full object-cover" />
           <canvas
             ref={overlayCanvasRef}
             width={CANVAS_WIDTH}
