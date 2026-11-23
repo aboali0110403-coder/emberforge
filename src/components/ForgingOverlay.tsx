@@ -7,6 +7,7 @@ import { getQualityGrade } from '../game/rules';
 import { ParticlePool } from '../gfx/particles';
 import { getWeaponSpriteCanvas } from '../gfx/sprites';
 import { STRINGS } from '../strings';
+import type { ForgeInsightEntry, ForgeInsightReport } from '../game/forgeInsightReport';
 import type {
   AudioSettings,
   DeliverySummary,
@@ -16,6 +17,62 @@ import type {
   WeaponInstance,
 } from '../types';
 import { MaterialSprite } from './PixelThumbnail';
+
+// Presentation-only formatting for forge insight entries. Report data stores
+// raw numeric measurements; every toFixed/percent/join mapping happens here,
+// never in the stored report.
+const formatInsightEntryValue = (entry: ForgeInsightEntry): string => {
+  const judgmentLabels = STRINGS.delivery.insight.judgments as Record<string, string>;
+  const v = entry.value;
+  switch (entry.key) {
+    case 'elapsed':
+    case 'inBand':
+    case 'overheat':
+    case 'inZone':
+      return `${(v as number).toFixed(1)}s`;
+    case 'bandShare':
+    case 'zoneShare':
+      return `${Math.round((v as number) * 100)}%`;
+    case 'scorch':
+      return `${(v as number) > 0 ? '-' : ''}${(v as number).toFixed(3)}`;
+    case 'fitPenalty':
+      return `${(v as number) > 0 ? '-' : ''}${(v as number).toFixed(2)}`;
+    case 'releaseTemp':
+      return (v as number).toFixed(2);
+    case 'strikeScores':
+    case 'bindScores':
+      return (v as number[]).map((x) => x.toFixed(2)).join(', ');
+    case 'window': {
+      const [min, max] = v as number[];
+      return `${min.toFixed(2)} - ${max.toFixed(2)}`;
+    }
+    case 'strikes':
+    case 'binds': {
+      const [done, total] = v as number[];
+      return `${done}/${total}`;
+    }
+    case 'judgment':
+      return judgmentLabels[v as string] ?? String(v);
+    case 'fitResults':
+    case 'strikeJudgments':
+    case 'bindJudgments':
+      return (v as string[]).map((x) => judgmentLabels[x] ?? x).join(', ');
+    case 'judgmentTally': {
+      const [perfect, good, miss] = v as number[];
+      return `${perfect} ${judgmentLabels.perfect} · ${good} ${judgmentLabels.good} · ${miss} ${judgmentLabels.miss}`;
+    }
+    default:
+      return String(v);
+  }
+};
+
+// Step identity for a step whose insight report is unavailable: ordering and
+// station come from the actual forge step list; no measurement is fabricated.
+const missingStepTitle = (summary: DeliverySummary, stepIdx: number): string => {
+  const station = summary.steps?.[stepIdx];
+  const base = `${STRINGS.delivery.insight.stepLabel} ${stepIdx + 1}`;
+  return station ? `${base} · ${STRINGS.stations[station].title}` : base;
+};
 
 interface ForgingOverlayProps {
   forging: ForgingSession;
@@ -557,6 +614,89 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
               </span>
             )}
           </div>
+
+          {(() => {
+            const reports = summary.stepReports;
+            const stepsList = summary.steps;
+            const hasSteps = Boolean(stepsList && stepsList.length > 0);
+            // V2 summaries (no step list, no reports) render no section.
+            if (!hasSteps && (!reports || !reports.some(Boolean))) return null;
+            const count = hasSteps ? stepsList!.length : reports!.length;
+            return (
+            <div
+              data-testid="forge-insight"
+              className="flex flex-col gap-2 border border-[#4a3222] bg-[#17100d] p-3"
+            >
+              <div className="font-pixel text-xs font-bold text-[#fde047]">
+                {STRINGS.delivery.insight.title}
+              </div>
+              <div className="font-pixel text-[10px] text-[#b89f7d]">
+                {STRINGS.delivery.insight.legend}
+              </div>
+              {Array.from({ length: count }, (_, stepIdx) => {
+                const report = reports?.[stepIdx];
+                return (
+                <div
+                  key={stepIdx}
+                  data-testid={`forge-insight-step-${stepIdx}`}
+                  className="flex flex-col gap-1 border-t border-[#362419] pt-1.5"
+                >
+                  {report ? (
+                    <>
+                      <div className="font-pixel flex flex-wrap items-baseline gap-x-2 text-xs font-bold text-[#fffbeb]">
+                        <span>
+                          {STRINGS.delivery.insight.stepLabel} {stepIdx + 1} ·{' '}
+                          {STRINGS.stations[report.station].title}
+                        </span>
+                        <span className="tabular-nums text-[#93c5fd]">
+                          {STRINGS.delivery.insight.labels.accuracy}:{' '}
+                          {Math.round(report.accuracy * 100)}%
+                        </span>
+                        <span className="text-[10px] font-normal text-[#4ade80]">
+                          ({STRINGS.delivery.insight.observedTag})
+                        </span>
+                      </div>
+                      <div className="font-pixel flex flex-wrap items-baseline gap-x-1 text-[10px] tabular-nums text-[#d4b88c]">
+                        <span>
+                          {STRINGS.delivery.insight.labels.bestStreak}: {report.bestStreak}
+                        </span>
+                        <span className="text-[#4ade80]">
+                          ({STRINGS.delivery.insight.observedTag})
+                        </span>
+                      </div>
+                      {report.entries.map((entry) => (
+                        <div
+                          key={entry.key}
+                          className="font-pixel flex flex-wrap items-baseline gap-x-1 text-[10px] text-[#d4b88c]"
+                        >
+                          <span className="tabular-nums">
+                            {STRINGS.delivery.insight.labels[entry.key] ?? entry.key}:{' '}
+                            {formatInsightEntryValue(entry)}
+                          </span>
+                          <span className={entry.derived ? 'text-[#b89f7d]' : 'text-[#4ade80]'}>
+                            (
+                            {entry.derived
+                              ? STRINGS.delivery.insight.derivedTag
+                              : STRINGS.delivery.insight.observedTag}
+                            )
+                          </span>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="font-pixel flex flex-wrap items-baseline gap-x-2 text-xs font-bold text-[#fffbeb]">
+                      <span>{missingStepTitle(summary, stepIdx)}</span>
+                      <span className="text-[10px] font-normal text-[#b89f7d]">
+                        ({STRINGS.delivery.insight.unavailable})
+                      </span>
+                    </div>
+                  )}
+                </div>
+                );
+              })}
+            </div>
+            );
+          })()}
 
           <p className="font-pixel text-xs text-[#d4b88c]">
             {summary.order.customerName} heads to {summary.order.scenarioName}. A

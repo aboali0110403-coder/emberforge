@@ -664,6 +664,7 @@ export default function App() {
         forging,
         payload.accuracy,
         payload.bestStreak,
+        payload.insight,
       );
 
       if (!stepOutcome.finishedAll) {
@@ -906,6 +907,8 @@ export default function App() {
         selectedMaterials: forging.selectedMaterials,
         legendaryMilestone: milestone,
         newAchievements: newlyUnlockedAch,
+        stepReports: stepOutcome.nextSession.stepReports,
+        steps: stepOutcome.nextSession.steps,
       });
 
       if (letterForModal && milestone !== null) {

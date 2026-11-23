@@ -1,3 +1,5 @@
+import type { ForgeInsightReport } from './game/forgeInsightReport';
+
 export type RaceId = 'human' | 'elf' | 'goblin' | 'orc' | 'demon';
 
 export type RarityId = 'common' | 'uncommon' | 'rare' | 'epic' | 'mythic';
@@ -289,6 +291,9 @@ export interface ForgingSession {
   targetPart: string;
   streak: number;
   bestStreakInForge: number;
+  // V3-1: ephemeral per-step insight reports indexed by step. App state only;
+  // never persisted.
+  stepReports?: (ForgeInsightReport | undefined)[];
 }
 
 export interface DeliverySummary {
@@ -311,4 +316,11 @@ export interface DeliverySummary {
   selectedMaterials?: MaterialStackSelection[];
   legendaryMilestone: number | null;
   newAchievements: string[];
+  // V3-1: per-step insight reports indexed by step, available at the existing
+  // receipt boundary. Optional so existing summary construction is unaffected.
+  stepReports?: (ForgeInsightReport | undefined)[];
+  // V3-1 correction: the actual forge step list, so the receipt can show step
+  // identity (order and station) even for steps whose report is unavailable.
+  // Ephemeral; never persisted.
+  steps?: StationId[];
 }
