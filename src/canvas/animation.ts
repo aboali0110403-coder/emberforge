@@ -343,3 +343,32 @@ export function computeBattleTimeline(
     bannerAlpha: safeT > 2.05 ? easeOutCubic((safeT - 2.05) / 0.3) : 0,
   };
 }
+
+/** Presentation-only easing. The caller gets phase from the saved world clock.
+ * This scalar cannot advance world time, run events, or modify the save.
+ */
+export function advanceWorkshopNightMix(
+  current: number | null,
+  phase: 'day' | 'night',
+  renderDt: number,
+): number {
+  const target = phase === 'night' ? 1 : 0;
+  // Seed a newly entered/restored workshop correctly, without a daytime flash.
+  if (current === null || !Number.isFinite(current)) return target;
+  const from = clamp01(current);
+  const dt = Number.isFinite(renderDt) ? Math.max(0, Math.min(0.05, renderDt)) : 0;
+  const next = from + (target - from) * -Math.expm1(-dt / 0.35);
+  return Math.abs(target - next) < 0.001 ? target : next;
+}
+
+export function getWorkshopAtmosphereSpec(nightMix: number) {
+  const mix = clamp01(nightMix);
+  return {
+    ambientShade: mix * 0.24,
+    daylight: (1 - mix) * 0.06,
+    hearthBoost: mix * 0.08,
+    floorBoost: mix * 0.04,
+    flameBoost: mix * 0.06,
+    shelfBoost: mix * 0.04,
+  };
+}

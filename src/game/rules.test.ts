@@ -1,3 +1,11 @@
+import './materialCommitmentUI.test';
+import './materialCommitment.test';
+import './dailyLedger.test';
+// The test command lists entry suites explicitly; keep new cycle tests included.
+import './worldCycle.test';
+import './progressionReachability.test';
+import './legendaryMilestones.test';
+import './battleHudStatus.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

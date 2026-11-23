@@ -216,7 +216,7 @@ test('legacy ready battles without a result are resolved once during migration',
   const migrated = migrateSaveState(JSON.parse(JSON.stringify(v2Save)));
   assert.ok(migrated);
   assert.equal(migrated?.version, SAVE_VERSION);
-  assert.equal(migrated?.version, 3);
+  assert.equal(migrated?.version, SAVE_VERSION);
   const result = migrated?.pendingBattles[0].resolvedResult;
   assert.ok(result, 'legacy ready battle resolved during migration');
   assert.equal(result?.battleId, legacyBattle.id);
@@ -302,7 +302,7 @@ test('v1 and v2 saves migrate to the current version and keep player data', () =
   };
   const migratedV1 = migrateSaveState(v1Raw);
   assert.ok(migratedV1);
-  assert.equal(migratedV1?.version, 3);
+  assert.equal(migratedV1?.version, SAVE_VERSION);
   assert.equal(migratedV1?.player.name, 'OldSmith');
   assert.equal(migratedV1?.gold, 321);
   assert.equal(migratedV1?.smithXp, 70); // v1 -> v2 backfill preserved
@@ -311,7 +311,7 @@ test('v1 and v2 saves migrate to the current version and keep player data', () =
   v2Save.gold = 555;
   (v2Save as { version: number }).version = 2;
   const migratedV2 = migrateSaveState(JSON.parse(JSON.stringify(v2Save)));
-  assert.equal(migratedV2?.version, 3);
+  assert.equal(migratedV2?.version, SAVE_VERSION);
   assert.equal(migratedV2?.gold, 555);
   assert.ok(migratedV2?.pendingBattles[0].resolvedResult);
 });

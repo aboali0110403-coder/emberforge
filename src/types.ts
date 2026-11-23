@@ -217,11 +217,28 @@ export interface GameStats {
   masterworkCount?: number;
 }
 
+// Accounting remains inactive until a separately authorized integration phase.
+export interface DailyBucket {
+  dayIndex: number;
+  observedFromSec: number;
+  coverage: 'complete' | 'partial';
+  deliveries: number; // Accepted transactions, not unique order IDs.
+  missed: number;
+  deliveryGold: number;
+}
+
+export interface DailyLedger {
+  format: 1;
+  current: DailyBucket;
+  closed: DailyBucket[]; // Oldest first, at most 30.
+}
+
 export interface SaveState {
   version: number;
   createdAt: number;
   updatedAt: number;
   activePlaySec: number;
+  dailyLedger: DailyLedger;
   smithXp: number;
   player: PlayerCustomization;
   gold: number;

@@ -20,6 +20,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({ save, onClose })
   const armory = [...(save.weaponArmory ?? [])].reverse();
   const completedOrders = [...(save.completedOrders ?? [])].reverse();
   const battleHistory = [...(save.battleHistory ?? [])].reverse();
+  const lastClosedDay = save.dailyLedger.closed[save.dailyLedger.closed.length - 1];
 
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/75 p-2 sm:p-4 safe-area-inset">
@@ -186,7 +187,45 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({ save, onClose })
         )}
 
         {tab === 'ledger' && (
-          <div className="flex flex-col gap-4">
+          <div className="flex shrink-0 flex-col gap-4">
+            <section
+              aria-labelledby="last-closed-day-heading"
+              className="min-w-0 shrink-0 border border-[#4a3222] bg-[#17100d] p-3 font-pixel text-xs text-[#f6e7cb]"
+            >
+              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <h3 id="last-closed-day-heading" className="min-w-0 break-words font-bold text-[#fde047]">
+                  Last recorded closed day{lastClosedDay && `: Day ${lastClosedDay.dayIndex}`}
+                </h3>
+                {lastClosedDay && (
+                  <p className="min-w-0 break-words">
+                    Coverage: {lastClosedDay.coverage === 'complete' ? 'Complete' : 'Partial'}
+                  </p>
+                )}
+              </div>
+              {lastClosedDay ? (
+                <>
+                  <dl className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="min-w-0">
+                      <dt className="break-words">Deliveries completed</dt>
+                      <dd className="break-all text-sm font-bold tabular-nums">{lastClosedDay.deliveries}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="break-words">Orders missed</dt>
+                      <dd className="break-all text-sm font-bold tabular-nums">{lastClosedDay.missed}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="break-words">Delivery gold earned</dt>
+                      <dd className="break-all text-sm font-bold tabular-nums">{lastClosedDay.deliveryGold}g</dd>
+                    </div>
+                  </dl>
+                  {lastClosedDay.coverage === 'partial' && (
+                    <p className="mt-2 break-words">Partial record. Some activity may be missing.</p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-2 break-words">No closed-day summary available.</p>
+              )}
+            </section>
             <div className="grid grid-cols-2 gap-2 border border-[#4a3222] bg-[#17100d] p-3 font-pixel text-xs sm:grid-cols-4">
               <div>
                 <div className="text-[#9ca3af]">Orders Built</div>

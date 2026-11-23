@@ -37,6 +37,16 @@ export const STRINGS = {
     rotateTitle: 'Rotate Your Device',
     rotateBody: 'Emberforge is crafted for landscape play. Turn your device sideways for the best forge view.',
   },
+  worldCycle: {
+    dayLabel: 'DAY',
+    day: 'DAY',
+    night: 'NIGHT',
+    nightClosedShort: 'Closed at night',
+    nightClosed: 'Closed for the night. No new customers until dawn. Existing orders remain available.',
+    skipNight: 'Skip Night',
+    skipHelp: 'Advance to dawn. Existing order deadlines continue and late orders expire.',
+    skipUnavailable: 'Close menus and finish forging before skipping night.',
+  },
   stations: {
     furnace: {
       title: 'Furnace',
@@ -103,6 +113,22 @@ export const STRINGS = {
     mastersChoice: "Master's Choice — Choose up to 6 Steps",
     startForge: 'Begin Forging',
     deadlineLabel: 'Deadline',
+    battlePreviewAssumptions:
+      'Preview: hypothetical 85% quality, selected materials and current equipment, no weapon-level gain from this delivery, current Smith level before delivery XP. Actual odds may be higher or lower; victory is not guaranteed.',
+    timing: {
+      summary: 'Timing & prompt tip (deadlines paused here)',
+      ordinary: 'Ordinary and Royal orders expire at zero Patience.',
+      tutorial: 'This tutorial order does not expire.',
+      pause: 'Patience uses gameplay seconds, not real-world time. Order deadlines pause in Orders, other menus and throughout forging. World time may still advance.',
+      skip: 'Skip Night advances existing deadlines and can expire non-tutorial orders.',
+      prompt: 'Optional prompt tip: at least 50% of the deadline must remain when forging starts, and the actual final quality grade must not be D. The tip is not guaranteed.',
+      warning: 'Red Patience means below 35%, a different threshold. At 99/200, the ratio is below 50% but above 35%. At 100/200, the ratio condition is met, but the final grade still matters.',
+      speed: 'Forging faster cannot preserve or improve the prompt-tip ratio: deadlines pause throughout forging.',
+    },
+  },
+  delivery: {
+    continueBtn: 'Continue',
+    acknowledgement: 'Delivery complete. The delivery fee and Smith XP have already been applied.',
   },
   shop: {
     title: 'Supply & Forge Shop',

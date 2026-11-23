@@ -1,3 +1,4 @@
+import { projectDailyLedger } from './game/dailyLedger';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { soundEngine } from './audio/soundEngine';
 import { GameCanvas } from './canvas/GameCanvas';
@@ -65,6 +66,13 @@ import {
   resolveContinueSave,
 } from './game/saveReliability';
 import type { SaveWarning, ShownSaveWarning } from './game/saveReliability';
+import {
+  advanceArrivalCountdown,
+  advanceOrderDeadlines,
+  canReceiveNewOrders,
+  isSkipNightAvailable,
+  skipNight,
+} from './game/worldCycle';
 import { STRINGS } from './strings';
 import type {
   ActiveModal,
@@ -121,8 +129,9 @@ export default function App() {
 
   const saveRef = useRef<SaveState | null>(null);
   const autosaveElapsed = useRef(0);
-  const simulationUi = useRef({ activeModal, forging });
-  simulationUi.current = { activeModal, forging };
+  const ledgerObservation = useRef<SaveState['dailyLedger'] | null>(null);
+  const simulationUi = useRef({ activeModal, forging, screen, forgePaused, bgPaused });
+  simulationUi.current = { activeModal, forging, screen, forgePaused, bgPaused };
   const pendingSaveWarning = useRef<SaveWarning | null>(null);
   const displayedSaveWarning = useRef<SaveWarning | null>(null);
   const lastSaveWarning = useRef<ShownSaveWarning | null>(null);
@@ -283,46 +292,36 @@ export default function App() {
       const deadlinesPaused =
         simulationUi.current.activeModal !== null || simulationUi.current.forging !== null;
 
+      let expiredOrders = prev.orders.slice(0, 0);
       let nextOrders = prev.orders;
       let nextPop = prev.popularity;
       let nextMissed = prev.stats.ordersMissed;
       let nextNoMissStreak = prev.stats.noMissStreak;
       let nextCustomerTimer = prev.nextCustomerTimerSec;
 
+      const advancedPlaySec = prev.activePlaySec + 1;
       if (!deadlinesPaused) {
-        const updatedOrders: Order[] = [];
-        for (const ord of prev.orders) {
-          const rem = ord.remainingSec - 1;
-          if (rem <= 0 && !ord.isTutorial) {
-            nextMissed += 1;
-            nextNoMissStreak = 0;
-            nextPop = {
-              ...nextPop,
-              [ord.race]: Math.max(
-                0,
-                nextPop[ord.race] - BALANCE.popularityMissDeadlinePenalty,
-              ),
-            };
-            showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
-          } else {
-            updatedOrders.push({
-              ...ord,
-              remainingSec: ord.isTutorial ? Math.max(60, rem) : rem,
-            });
-          }
+        const deadlines = advanceOrderDeadlines(prev, 1, BALANCE.popularityMissDeadlinePenalty);
+        expiredOrders = deadlines.expiredOrders;
+        nextOrders = deadlines.orders;
+        nextPop = deadlines.popularity;
+        nextMissed = deadlines.ordersMissed;
+        nextNoMissStreak = deadlines.noMissStreak;
+        for (const ord of deadlines.expiredOrders) {
+          showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
         }
-        nextOrders = updatedOrders;
 
-        // Customer arrival at door
-        if (nextOrders.length < BALANCE.maxActiveOrders) {
-          nextCustomerTimer -= 1;
-          if (nextCustomerTimer <= 0) {
-            nextOrders = [...nextOrders, generateCustomerOrder(prev)];
-            nextCustomerTimer = randInt(
-              BALANCE.customerArrivalSecMin,
-              BALANCE.customerArrivalSecMax,
-            );
-          }
+        // Night closes creation only, never the existing deadline processing.
+        const arrival = advanceArrivalCountdown(
+          advancedPlaySec, nextCustomerTimer, nextOrders.length, BALANCE.maxActiveOrders,
+        );
+        nextCustomerTimer = arrival.remainingSec;
+        if (arrival.arrivalDue) {
+          nextOrders = [...nextOrders, generateCustomerOrder(prev)];
+          nextCustomerTimer = randInt(
+            BALANCE.customerArrivalSecMin,
+            BALANCE.customerArrivalSecMax,
+          );
         }
       }
 
@@ -351,7 +350,7 @@ export default function App() {
 
       const next: SaveState = {
         ...prev,
-        activePlaySec: prev.activePlaySec + 1,
+        activePlaySec: advancedPlaySec,
         orders: nextOrders,
         popularity: nextPop,
         pendingBattles: nextBattles,
@@ -364,6 +363,12 @@ export default function App() {
           noMissStreak: nextNoMissStreak,
         },
       };
+
+      next.dailyLedger = projectDailyLedger(prev, next, {
+        kind: 'tick', expiredOrders,
+        continuous: ledgerObservation.current === prev.dailyLedger,
+      });
+      ledgerObservation.current = next.dailyLedger;
 
       const cadence = advanceAutosave(autosaveElapsed.current, 1000);
       autosaveElapsed.current = cadence.elapsedMs;
@@ -582,6 +587,8 @@ export default function App() {
   );
 
   const handleSummonCustomer = useCallback(() => {
+    const live = saveRef.current;
+    if (!live || !canReceiveNewOrders(live.activePlaySec)) return;
     if (!save || save.orders.length >= BALANCE.maxActiveOrders || summonCooldownSec > 0) return;
     soundEngine.playUiBlip(760);
     setSummonCooldownSec(BALANCE.summonCooldownSec);
@@ -594,6 +601,29 @@ export default function App() {
       ),
     }));
   }, [save, summonCooldownSec, commitSave]);
+
+  const handleSkipNight = useCallback(() => {
+    const live = saveRef.current;
+    const ui = simulationUi.current;
+    if (!live || !isSkipNightAvailable(live.activePlaySec, {
+      ...ui, hidden: document.hidden, forging: ui.forging !== null,
+    })) return;
+    const skipped = skipNight(live, BALANCE.popularityMissDeadlinePenalty);
+    if (skipped.skippedSec === 0) return;
+    const next = {
+      ...skipped.state,
+      dailyLedger: projectDailyLedger(live, skipped.state, {
+        kind: 'skip', expiredOrders: skipped.expiredOrders,
+        continuous: ledgerObservation.current === live.dailyLedger,
+      }),
+    };
+    ledgerObservation.current = next.dailyLedger;
+    publishSave(next);
+    persistCurrent(next);
+    for (const ord of skipped.expiredOrders) {
+      showToast(`Missed deadline: ${ord.customerName} (-${BALANCE.popularityMissDeadlinePenalty} Rep)`);
+    }
+  }, [publishSave, persistCurrent, showToast]);
 
   const handleStartForge = useCallback(
     (
@@ -845,6 +875,11 @@ export default function App() {
           draft.gold += achRes.goldAwarded;
           draft.stats.totalGoldEarned += achRes.goldAwarded;
         }
+        draft.dailyLedger = projectDailyLedger(prev, draft, {
+          kind: 'delivery', feeGold: goldEarned,
+          continuous: ledgerObservation.current === prev.dailyLedger,
+        });
+        ledgerObservation.current = draft.dailyLedger;
         return draft;
       });
 
@@ -930,6 +965,9 @@ export default function App() {
     save !== null &&
     !save.tutorialsSeen.stations[currentStation];
 
+  const deliveryReceiptVisible =
+    screen === 'workshop' && save !== null && activeModal === 'delivery' && deliverySummary !== null;
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#120c0a] select-none">
       {/* Persistent 480x270 Pixel Canvas */}
@@ -971,6 +1009,11 @@ export default function App() {
         <HudOverlay
           save={save}
           activeModal={activeModal}
+          canSkipNight={isSkipNightAvailable(save.activePlaySec, {
+            screen, hidden: document.hidden, bgPaused, activeModal,
+            forging: forging !== null, forgePaused,
+          })}
+          onSkipNight={handleSkipNight}
           onOpenModal={(m) => {
             soundEngine.playUiBlip(660);
             if (m === 'battle') {
@@ -1129,9 +1172,14 @@ export default function App() {
         <AchievementsModal save={save} onClose={() => setActiveModal(null)} />
       )}
 
-      {screen === 'workshop' && save && activeModal === 'delivery' && deliverySummary && (
+      {deliveryReceiptVisible && deliverySummary && (
         <DeliveryModal
           summary={deliverySummary}
+          notification={!saveWarning && toastMsg ? (
+            <div className="max-w-full border-2 border-[#fde047] bg-[#1a110e] px-4 py-2 shadow-lg" style={{ overflowWrap: 'anywhere' }}>
+              <span className="font-pixel text-xs font-bold text-[#fde047]">{toastMsg}</span>
+            </div>
+          ) : undefined}
           onConfirm={() => {
             setDeliverySummary(null);
             if (legendaryPayload) {
@@ -1260,8 +1308,8 @@ export default function App() {
       )}
 
       {/* Save warnings sit above the portrait rotate hint; ordinary toasts keep their existing layer. */}
-      {(saveWarning || toastMsg) && (
-        <div className={`pointer-events-none fixed bottom-12 left-1/2 ${saveWarning ? 'z-[60]' : 'z-50'} -translate-x-1/2 border-2 border-[#fde047] bg-[#1a110e] px-4 py-2 shadow-lg`}>
+      {(saveWarning || (toastMsg && !deliveryReceiptVisible)) && (
+        <div data-testid="global-notification" className={`pointer-events-none fixed bottom-12 left-1/2 ${saveWarning ? 'z-[60]' : 'z-50'} -translate-x-1/2 border-2 border-[#fde047] bg-[#1a110e] px-4 py-2 shadow-lg`}>
           <span className="font-pixel text-xs font-bold text-[#fde047]">{saveWarning?.message ?? toastMsg}</span>
         </div>
       )}
