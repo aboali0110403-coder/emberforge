@@ -169,7 +169,7 @@ export const BattleReportModal: React.FC<BattleReportModalProps> = ({
 
             {result.territoryConquered && result.won && (
               <div className="font-pixel border border-[#fde047] bg-[#2e2016] px-3 py-1.5 text-xs font-bold text-[#fde047]">
-                ★ Territory Liberated! {result.scenarioName} is now cleared (+5% {race.kingdomName} Gold Tribute).
+                Claim to clear {result.scenarioName} and gain +5% {race.kingdomName} Gold Tribute.
               </div>
             )}
 
@@ -200,7 +200,7 @@ export const BattleReportModal: React.FC<BattleReportModalProps> = ({
             {result.won && result.materialRewards.length > 0 ? (
               <div>
                 <div className="font-pixel mb-1.5 text-xs text-[#d4b88c]">
-                  {race.name} Spoils Awarded:
+                  {race.name} Spoils to Claim:
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {result.materialRewards.map((rw) => {
@@ -235,6 +235,12 @@ export const BattleReportModal: React.FC<BattleReportModalProps> = ({
                   : 'The battle was fierce. Matching enemy weaknesses, quality grade, and higher weapon tiers improve win odds!'}
               </p>
             )}
+
+            <p className="font-pixel text-xs text-[#d4b88c]">
+              {result.won
+                ? 'Claim applies the battle rewards and popularity changes and records any new territory clear.'
+                : 'Acknowledging applies any battle popularity change.'}
+            </p>
 
             <button
               type="button"

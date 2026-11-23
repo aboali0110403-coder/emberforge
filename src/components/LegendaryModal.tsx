@@ -32,7 +32,7 @@ export const LegendaryModal: React.FC<LegendaryModalProps> = ({
             LEGENDARY MILESTONE · LEVEL {milestoneLevel}
           </div>
           <h2 className="font-display mt-1 text-2xl font-bold text-[#fde047]">
-            A Masterwork Forged!
+            Legendary Milestone Reached!
           </h2>
         </div>
 

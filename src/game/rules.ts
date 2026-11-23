@@ -1,3 +1,4 @@
+import { createDailyLedger, sanitizeDailyLedger } from './dailyLedger';
 import { ACHIEVEMENTS } from '../data/achievements';
 import { BALANCE, getStageMinRarity } from '../data/balance';
 import {
@@ -826,10 +827,14 @@ export function generateCustomerOrder(
   const maxSuggestedLevel = clamp(
     Math.round(2 + state.stats.ordersCompleted * 0.32 + (avgEquip - 1) * 2.2 + (smithLevel - 1) * 0.4),
     2,
-    17,
+    18,
   );
   const minSuggestedLevel = clamp(maxSuggestedLevel - 4, 1, 14);
-  const level = randInt(minSuggestedLevel, maxSuggestedLevel, rng);
+  const level = clamp(
+    randInt(minSuggestedLevel, maxSuggestedLevel, rng),
+    minSuggestedLevel,
+    maxSuggestedLevel,
+  );
 
   const weapon = createWeaponInstance(weaponDef.id, level, nextUid('wpn'));
   const scenario = pickRandom(raceDef.scenarios, rng);
@@ -918,6 +923,7 @@ export function createInitialSaveState(player: PlayerCustomization): SaveState {
     createdAt: now,
     updatedAt: now,
     activePlaySec: 0,
+    dailyLedger: createDailyLedger(0, 'complete'),
     smithXp: 0,
     player,
     gold: 120,
@@ -1020,6 +1026,20 @@ export function getLegendaryMultiplier(level: number): number {
 export function checkLegendaryMilestone(
   weapon: WeaponInstance,
 ): number | null {
+  if (Number.isFinite(weapon.level)) {
+    const selected = [...LEGENDARY_MILESTONES]
+      .reverse()
+      .find((milestone) => weapon.level >= milestone);
+    if (selected === undefined) return null;
+    const alreadyNotified = LEGENDARY_MILESTONES.some(
+      (milestone) =>
+        milestone >= selected &&
+        weapon.legendaryNotifiedLevels.includes(milestone),
+    );
+    return alreadyNotified ? null : selected;
+  }
+
+  // Preserve the existing public behavior for non-finite weapon levels.
   for (const milestone of LEGENDARY_MILESTONES) {
     if (
       weapon.level >= milestone &&
@@ -1488,11 +1508,19 @@ export function migrateSaveState(raw: unknown): SaveState | null {
     muted: Boolean(rawAudio.muted),
   };
 
+  // Preserve the existing gameplay clock sanitizer exactly. A changed clock
+  // cannot authenticate accounting from the raw snapshot.
+  const cleanActivePlaySec = Math.round(sanitizePositiveNumber(obj.activePlaySec, 0, 100_000_000));
+  const dailyLedger = obj.version === 4 && obj.activePlaySec === cleanActivePlaySec
+    ? sanitizeDailyLedger(obj.dailyLedger, cleanActivePlaySec)
+    : createDailyLedger(cleanActivePlaySec);
+
   const sanitized: SaveState = {
     version: SAVE_VERSION,
     createdAt: Math.round(sanitizePositiveNumber(obj.createdAt, base.createdAt, Number.MAX_SAFE_INTEGER)),
     updatedAt: Math.round(sanitizePositiveNumber(obj.updatedAt, Date.now(), Number.MAX_SAFE_INTEGER)),
-    activePlaySec: Math.round(sanitizePositiveNumber(obj.activePlaySec, 0, 100_000_000)),
+    activePlaySec: cleanActivePlaySec,
+    dailyLedger,
     smithXp: cleanSmithXp,
     player: cleanPlayer,
     gold: Math.round(sanitizePositiveNumber(obj.gold, 120, 9_999_999)),

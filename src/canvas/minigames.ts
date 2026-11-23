@@ -25,11 +25,21 @@ import type {
   WeaponInstance,
   WeaponTypeId,
 } from '../types';
+import {
+  buildQuenchInsight,
+  buildStationInsight,
+  type ForgeInsightReport,
+  type QuenchJudgment,
+} from '../game/forgeInsightReport';
 import { easeOutCubic, getWeaponHeatSpec } from './animation';
 
 export interface MinigameFinishPayload {
   accuracy: number; // 0..1
   bestStreak: number;
+  // V3-1: optional per-step performance report assembled from the runtime's
+  // stored counters at the existing emission sites. GameCanvas forwards the
+  // payload object unchanged, so no canvas change is needed.
+  insight?: ForgeInsightReport;
 }
 
 export interface JudgmentPopup {
@@ -90,6 +100,9 @@ export interface MinigameRuntime {
   wbPhase: 'fit' | 'bind';
   slots: { x: number; y: number; fitted: boolean; label: string }[];
   fitMisses: number;
+  // V3-1: one recorded outcome per actual fit attempt, captured where the
+  // runtime decides success (slot fitted) or failure (fitMisses increment).
+  fitResults: ('good' | 'miss')[];
   bindBeatsDone: number;
   bindBeatsTotal: number;
   bindPulse: number; // 0..1
@@ -172,6 +185,7 @@ export function createMinigameRuntime(
       { x: 295, y: 124, fitted: false, label: 'Trim' },
     ],
     fitMisses: 0,
+    fitResults: [],
     bindBeatsDone: 0,
     bindBeatsTotal: 6,
     bindPulse: 0,
@@ -245,6 +259,7 @@ export function handleMinigamePointerDown(
         if (nextSlot) {
           nextSlot.fitted = true;
           hitAny = true;
+          rt.fitResults.push('good');
           soundEngine.playUiBlip(780);
           particles.burstSparks(nextSlot.x, nextSlot.y, 10, '#60a5fa');
           particles.spawnRing(nextSlot.x, nextSlot.y, 24, '#93c5fd');
@@ -255,6 +270,7 @@ export function handleMinigamePointerDown(
           if (!slot.fitted && Math.hypot(wx - slot.x, wy - slot.y) <= snapRadius) {
             slot.fitted = true;
             hitAny = true;
+            rt.fitResults.push('good');
             soundEngine.playUiBlip(780);
             particles.burstSparks(slot.x, slot.y, 10, '#60a5fa');
             particles.spawnRing(slot.x, slot.y, 24, '#93c5fd');
@@ -267,6 +283,7 @@ export function handleMinigamePointerDown(
 
       if (!hitAny) {
         rt.fitMisses += 1;
+        rt.fitResults.push('miss');
         rt.streak = 0;
         cb.onStreak(0);
         soundEngine.playWarningTone();
@@ -408,17 +425,20 @@ function releaseQuench(
   cb: MinigameCallbacks,
 ): void {
   rt.quenchDone = true;
+  let judgment: QuenchJudgment;
   const mid = (rt.targetTempMin + rt.targetTempMax) / 2;
   const half = (rt.targetTempMax - rt.targetTempMin) / 2;
   const dist = Math.abs(rt.temp - mid);
 
   if (rt.temp <= 0.04) {
     rt.accuracy = 0.32;
+    judgment = 'brittle';
     rt.statusBanner = { text: 'BRITTLE OVER-COOL!', color: '#f87171' };
     soundEngine.playWarningTone();
     triggerPopup(rt, 'miss', 186, 108);
   } else if (dist <= half * 0.42) {
     rt.accuracy = 1.0;
+    judgment = 'perfect';
     rt.streak += 1;
     rt.bestStreak = Math.max(rt.bestStreak, rt.streak);
     rt.statusBanner = { text: 'MASTER TEMPER!', color: '#fde047' };
@@ -428,16 +448,22 @@ function releaseQuench(
     triggerPopup(rt, 'perfect', 186, 108);
   } else if (dist <= half * 1.15) {
     rt.accuracy = 0.83;
+    judgment = 'good';
     soundEngine.playQuenchHiss();
     particles.burstSteam(186, 150, 14);
     triggerPopup(rt, 'good', 186, 108);
   } else {
     rt.accuracy = Math.max(0.34, 0.72 - dist);
+    judgment = 'miss';
     soundEngine.playWarningTone();
     triggerPopup(rt, 'miss', 186, 108);
   }
   rt.finished = true;
-  cb.onFinish({ accuracy: rt.accuracy, bestStreak: rt.bestStreak });
+  cb.onFinish({
+    accuracy: rt.accuracy,
+    bestStreak: rt.bestStreak,
+    insight: buildQuenchInsight(rt, judgment),
+  });
 }
 
 function finishMinigame(
@@ -449,7 +475,11 @@ function finishMinigame(
   const anvilBonus = (equipment.anvil - 1) * 0.02;
   rt.accuracy = Math.min(1, Math.max(0.22, rt.accuracy + anvilBonus));
   rt.finished = true;
-  cb.onFinish({ accuracy: rt.accuracy, bestStreak: rt.bestStreak });
+  cb.onFinish({
+    accuracy: rt.accuracy,
+    bestStreak: rt.bestStreak,
+    insight: buildStationInsight(rt),
+  });
 }
 
 export function updateMinigame(

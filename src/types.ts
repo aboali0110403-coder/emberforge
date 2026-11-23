@@ -1,3 +1,5 @@
+import type { ForgeInsightReport } from './game/forgeInsightReport';
+
 export type RaceId = 'human' | 'elf' | 'goblin' | 'orc' | 'demon';
 
 export type RarityId = 'common' | 'uncommon' | 'rare' | 'epic' | 'mythic';
@@ -217,11 +219,28 @@ export interface GameStats {
   masterworkCount?: number;
 }
 
+// Accounting remains inactive until a separately authorized integration phase.
+export interface DailyBucket {
+  dayIndex: number;
+  observedFromSec: number;
+  coverage: 'complete' | 'partial';
+  deliveries: number; // Accepted transactions, not unique order IDs.
+  missed: number;
+  deliveryGold: number;
+}
+
+export interface DailyLedger {
+  format: 1;
+  current: DailyBucket;
+  closed: DailyBucket[]; // Oldest first, at most 30.
+}
+
 export interface SaveState {
   version: number;
   createdAt: number;
   updatedAt: number;
   activePlaySec: number;
+  dailyLedger: DailyLedger;
   smithXp: number;
   player: PlayerCustomization;
   gold: number;
@@ -272,6 +291,9 @@ export interface ForgingSession {
   targetPart: string;
   streak: number;
   bestStreakInForge: number;
+  // V3-1: ephemeral per-step insight reports indexed by step. App state only;
+  // never persisted.
+  stepReports?: (ForgeInsightReport | undefined)[];
 }
 
 export interface DeliverySummary {
@@ -294,4 +316,11 @@ export interface DeliverySummary {
   selectedMaterials?: MaterialStackSelection[];
   legendaryMilestone: number | null;
   newAchievements: string[];
+  // V3-1: per-step insight reports indexed by step, available at the existing
+  // receipt boundary. Optional so existing summary construction is unaffected.
+  stepReports?: (ForgeInsightReport | undefined)[];
+  // V3-1 correction: the actual forge step list, so the receipt can show step
+  // identity (order and station) even for steps whose report is unavailable.
+  // Ephemeral; never persisted.
+  steps?: StationId[];
 }

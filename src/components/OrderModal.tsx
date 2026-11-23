@@ -12,6 +12,8 @@ import {
   getEnemyArchetypeForScenario,
   getMaterialAffinity,
 } from '../game/rules';
+import { compareMaterialCommitment } from '../game/materialCommitment';
+import { canReceiveNewOrders } from '../game/worldCycle';
 import { STRINGS } from '../strings';
 import type {
   MaterialShape,
@@ -58,6 +60,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   onSummonCustomer,
   onStartForge,
 }) => {
+  const nightClosed = !canReceiveNewOrders(save.activePlaySec);
   const [selectedOrderId, setSelectedOrderId] = useState<string>(
     save.orders[0]?.id ?? '',
   );
@@ -121,6 +124,16 @@ export const OrderModal: React.FC<OrderModalProps> = ({
       )
     : null;
 
+  // Presentation-only truthfulness at the cap: production progression caps
+  // weapon level at 20 and rollWeaponLevelUp performs no Level-Up RNG roll
+  // for an incoming weapon already at level 20 or higher, so a probabilistic
+  // Level-Up estimate would be misleading there.
+  const incomingAtMaxLevel = activeOrder !== null && activeOrder.weapon.level >= 20;
+
+  const materialCommitment = activeOrder
+    ? compareMaterialCommitment(activeOrder, save, stacks)
+    : null;
+
   const totalUnitsSelected = stacks.reduce((sum, s) => sum + s.units, 0);
   const showUnreinforcedWarn =
     activeOrder &&
@@ -170,13 +183,15 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             {save.orders.length < 3 && (
               <button
                 type="button"
-                disabled={summonCooldownSec > 0}
+                disabled={nightClosed || summonCooldownSec > 0}
                 onClick={onSummonCustomer}
                 className="forge-button font-pixel cursor-pointer px-3 py-2 text-xs text-[#fde047]"
               >
-                {summonCooldownSec > 0
-                  ? `Door Cooldown (${Math.ceil(summonCooldownSec)}s)`
-                  : STRINGS.orders.summonCustomer}
+                {nightClosed
+                  ? STRINGS.worldCycle.nightClosedShort
+                  : summonCooldownSec > 0
+                    ? `Door Cooldown (${Math.ceil(summonCooldownSec)}s)`
+                    : STRINGS.orders.summonCustomer}
               </button>
             )}
             <button
@@ -188,6 +203,12 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             </button>
           </div>
         </div>
+
+        {nightClosed && (
+          <p data-testid="night-closed" className="font-pixel border border-[#6b4931] bg-[#120c0a] px-3 py-2 text-xs text-[#fde047]">
+            {STRINGS.worldCycle.nightClosed}
+          </p>
+        )}
 
         {!save.tutorialsSeen.firstOrder && activeOrder?.isTutorial && (
           <div className="border border-[#f59e0b] bg-[#2e1e12] p-3 text-xs text-[#fef08a]">
@@ -201,13 +222,15 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             <p className="font-pixel text-sm text-[#d4b88c]">{STRINGS.orders.noOrders}</p>
             <button
               type="button"
-              disabled={summonCooldownSec > 0}
+              disabled={nightClosed || summonCooldownSec > 0}
               onClick={onSummonCustomer}
               className="forge-button-primary font-pixel cursor-pointer px-5 py-3 text-sm font-bold"
             >
-              {summonCooldownSec > 0
-                ? `Door Cooldown (${Math.ceil(summonCooldownSec)}s)`
-                : STRINGS.orders.summonCustomer}
+              {nightClosed
+                ? STRINGS.worldCycle.nightClosedShort
+                : summonCooldownSec > 0
+                  ? `Door Cooldown (${Math.ceil(summonCooldownSec)}s)`
+                  : STRINGS.orders.summonCustomer}
             </button>
           </div>
         ) : (
@@ -297,6 +320,26 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                   </div>
                 </div>
 
+                <div className="border border-[#4a3222] bg-[#120c0a] px-3 py-2 text-xs text-[#f6e7cb]">
+                  <p data-testid="order-deadline-rule">
+                    {activeOrder.isTutorial
+                      ? STRINGS.orders.timing.tutorial
+                      : STRINGS.orders.timing.ordinary}
+                  </p>
+                  <details key={activeOrder.id} data-testid="order-timing-help" className="mt-1">
+                    <summary className="font-pixel cursor-pointer py-1 text-[11px] text-[#fde047]">
+                      {STRINGS.orders.timing.summary}
+                    </summary>
+                    <ul className="mt-2 list-disc space-y-2 pl-4 leading-relaxed">
+                      <li>{STRINGS.orders.timing.pause}</li>
+                      <li>{STRINGS.orders.timing.skip}</li>
+                      <li>{STRINGS.orders.timing.prompt}</li>
+                      <li>{STRINGS.orders.timing.warning}</li>
+                      <li>{STRINGS.orders.timing.speed}</li>
+                    </ul>
+                  </details>
+                </div>
+
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#362419] pb-3">
                   <div className="flex items-center gap-3">
                     <WeaponSprite weapon={activeOrder.weapon} size={56} />
@@ -339,6 +382,15 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                     )}
                   </div>
                 </div>
+
+                {battlePreview && (
+                  <p
+                    data-testid="battle-preview-assumptions"
+                    className="font-pixel -mt-2 text-[11px] leading-relaxed text-[#b89f7d]"
+                  >
+                    {STRINGS.orders.battlePreviewAssumptions}
+                  </p>
+                )}
 
                 {/* Enemy Archetype Tactical Hint + Current Weapon Stats */}
                 <div className="flex flex-col gap-1 border border-[#362419] bg-[#120c0a] px-2.5 py-1.5 font-pixel text-[11px]">
@@ -425,8 +477,9 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                     </span>
                     {levelEval && (
                       <span className="font-pixel tabular-nums text-xs text-[#4ade80]">
-                        Est. Level-Up (85% Q): {Math.round(levelEval.chance * 100)}%
-                        {!levelEval.meetsStageRarity && ' (Cap 25%: low rarity)'}
+                        {incomingAtMaxLevel
+                          ? 'Maximum weapon level reached (20)'
+                          : `Est. Level-Up (85% Q): ${Math.round(levelEval.chance * 100)}%${!levelEval.meetsStageRarity ? ' (Cap 25%: low rarity)' : ''}`}
                       </span>
                     )}
                   </div>
@@ -526,6 +579,57 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                     </div>
                   )}
                 </div>
+
+                {materialCommitment && (
+                  <section
+                    data-testid="material-commitment"
+                    aria-label="Material commitment comparison"
+                    className="border border-[#6b4931] bg-[#211611] p-2.5"
+                  >
+                    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <h3 className="font-pixel text-xs font-bold text-[#f3dfb9]">Material commitment</h3>
+                      <p className="font-pixel text-[11px] text-[#b89f7d]">
+                        Hypothetical estimates at {Math.round(materialCommitment.qualityAssumption * 100)}% quality
+                      </p>
+                    </div>
+                    <dl className="font-pixel grid grid-cols-2 gap-x-3 gap-y-2 text-[11px] sm:grid-cols-3">
+                      <div className="min-w-0">
+                        <dt className="text-[#b89f7d]">With selected materials</dt>
+                        <dd data-testid="commitment-selected-fee" className="break-words text-sm font-bold tabular-nums text-[#fde047]">
+                          {materialCommitment.selectedEstimatedDeliveryFee}g
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-[#b89f7d]">Without materials</dt>
+                        <dd data-testid="commitment-zero-fee" className="break-words text-sm font-bold tabular-nums text-[#f3dfb9]">
+                          {materialCommitment.zeroMaterialEstimatedDeliveryFee}g
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-[#b89f7d]">Conditional fee difference</dt>
+                        <dd data-testid="commitment-fee-difference" className="break-words text-sm font-bold tabular-nums text-[#93c5fd]">
+                          {materialCommitment.conditionalDeliveryFeeDifference > 0 ? '+' : ''}{materialCommitment.conditionalDeliveryFeeDifference}g
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-[#b89f7d]">Selected material units</dt>
+                        <dd data-testid="commitment-units" className="text-sm font-bold tabular-nums text-[#f3dfb9]">
+                          {materialCommitment.selectedMaterialUnits}
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-[#b89f7d]">Current sell-back alternative</dt>
+                        <dd data-testid="commitment-sell-back" className="break-words text-sm font-bold tabular-nums text-[#f3dfb9]">
+                          {materialCommitment.currentSellBackValue}g
+                        </dd>
+                      </div>
+                    </dl>
+                    <p className="font-pixel mt-2 text-[11px] leading-relaxed text-[#b89f7d]">
+                      Fee difference is not profit or guaranteed additional earnings. Sell-back is a current alternative,
+                      not acquisition cost or net profit. Comparing does not reserve or consume materials.
+                    </p>
+                  </section>
+                )}
 
                 {/* Start Forging CTA */}
                 <div className="flex items-center justify-between gap-3 border-t border-[#362419] pt-3">

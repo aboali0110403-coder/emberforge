@@ -11,7 +11,8 @@ import type {
   PlayerCustomization,
   SaveState,
 } from '../types';
-import { computeWalkPose } from './animation';
+import { getWorldCycle } from '../game/worldCycle';
+import { advanceWorkshopNightMix, computeWalkPose } from './animation';
 import {
   createMinigameRuntime,
   handleMinigamePointerDown,
@@ -268,12 +269,18 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     let lastTime = performance.now();
     let totalTime = 0;
     let lastHudSync = 0;
+    // Local presentation state only. Phase always comes from the saved clock.
+    let workshopNightMix: number | null = null;
 
     const frame = (now: number) => {
       const rawDt = (now - lastTime) / 1000;
       lastTime = now;
       const dt = Math.min(rawDt, 0.05);
       const st = stateRef.current;
+      // Keep the target live even under Settings. This does not tick simulation.
+      workshopNightMix = st.mode === 'workshop' && st.save
+        ? advanceWorkshopNightMix(workshopNightMix, getWorldCycle(st.save.activePlaySec).phase, dt)
+        : null;
 
       if (!st.paused) {
         totalTime += dt;
@@ -342,6 +349,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           activeCharXRef.current,
           particlesRef.current,
           {
+            nightMix: workshopNightMix ?? undefined,
             activeSpot: activeSpotRef.current,
             isWalking: walkPose.isWalking,
             facing: walkPose.facing,

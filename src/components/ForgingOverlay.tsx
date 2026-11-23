@@ -7,6 +7,7 @@ import { getQualityGrade } from '../game/rules';
 import { ParticlePool } from '../gfx/particles';
 import { getWeaponSpriteCanvas } from '../gfx/sprites';
 import { STRINGS } from '../strings';
+import type { ForgeInsightEntry, ForgeInsightReport } from '../game/forgeInsightReport';
 import type {
   AudioSettings,
   DeliverySummary,
@@ -16,6 +17,62 @@ import type {
   WeaponInstance,
 } from '../types';
 import { MaterialSprite } from './PixelThumbnail';
+
+// Presentation-only formatting for forge insight entries. Report data stores
+// raw numeric measurements; every toFixed/percent/join mapping happens here,
+// never in the stored report.
+const formatInsightEntryValue = (entry: ForgeInsightEntry): string => {
+  const judgmentLabels = STRINGS.delivery.insight.judgments as Record<string, string>;
+  const v = entry.value;
+  switch (entry.key) {
+    case 'elapsed':
+    case 'inBand':
+    case 'overheat':
+    case 'inZone':
+      return `${(v as number).toFixed(1)}s`;
+    case 'bandShare':
+    case 'zoneShare':
+      return `${Math.round((v as number) * 100)}%`;
+    case 'scorch':
+      return `${(v as number) > 0 ? '-' : ''}${(v as number).toFixed(3)}`;
+    case 'fitPenalty':
+      return `${(v as number) > 0 ? '-' : ''}${(v as number).toFixed(2)}`;
+    case 'releaseTemp':
+      return (v as number).toFixed(2);
+    case 'strikeScores':
+    case 'bindScores':
+      return (v as number[]).map((x) => x.toFixed(2)).join(', ');
+    case 'window': {
+      const [min, max] = v as number[];
+      return `${min.toFixed(2)} - ${max.toFixed(2)}`;
+    }
+    case 'strikes':
+    case 'binds': {
+      const [done, total] = v as number[];
+      return `${done}/${total}`;
+    }
+    case 'judgment':
+      return judgmentLabels[v as string] ?? String(v);
+    case 'fitResults':
+    case 'strikeJudgments':
+    case 'bindJudgments':
+      return (v as string[]).map((x) => judgmentLabels[x] ?? x).join(', ');
+    case 'judgmentTally': {
+      const [perfect, good, miss] = v as number[];
+      return `${perfect} ${judgmentLabels.perfect} · ${good} ${judgmentLabels.good} · ${miss} ${judgmentLabels.miss}`;
+    }
+    default:
+      return String(v);
+  }
+};
+
+// Step identity for a step whose insight report is unavailable: ordering and
+// station come from the actual forge step list; no measurement is fabricated.
+const missingStepTitle = (summary: DeliverySummary, stepIdx: number): string => {
+  const station = summary.steps?.[stepIdx];
+  const base = `${STRINGS.delivery.insight.stepLabel} ${stepIdx + 1}`;
+  return station ? `${base} · ${STRINGS.stations[station].title}` : base;
+};
 
 interface ForgingOverlayProps {
   forging: ForgingSession;
@@ -430,11 +487,13 @@ const WeaponRevealStage: React.FC<WeaponRevealStageProps> = ({
 
 interface DeliveryModalProps {
   summary: DeliverySummary;
+  notification?: React.ReactNode;
   onConfirm: () => void;
 }
 
 export const DeliveryModal: React.FC<DeliveryModalProps> = ({
   summary,
+  notification,
   onConfirm,
 }) => {
   const wDef = WEAPONS[summary.order.weapon.type];
@@ -456,114 +515,211 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-2 sm:p-4 safe-area-inset">
-      <div className="forge-panel forge-scroll flex max-h-[94vh] w-full max-w-xl flex-col gap-3 overflow-y-auto p-4 sm:p-5">
-        <div className="flex items-center justify-between border-b border-[#4a3222] pb-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="font-display text-xl font-bold text-[#fde047] sm:text-2xl">
-              Order Delivered!
-            </h2>
-            <span
-              data-testid="delivery-grade-badge"
-              className="font-pixel border border-[#6b4931] bg-[#120c0a] px-2 py-0.5 text-xs font-bold"
-              style={{ color: gradeMeta.color }}
-            >
-              Grade {summary.qualityGrade} · {gradeMeta.label}
+      <div data-testid="delivery-layout" className="flex max-h-[94vh] min-h-0 w-full max-w-xl flex-col gap-2">
+        <div data-testid="delivery-scroll" className="forge-panel forge-scroll flex min-h-0 w-full flex-col gap-3 overflow-y-auto p-4 sm:p-5">
+          <div className="flex items-center justify-between border-b border-[#4a3222] pb-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-display text-xl font-bold text-[#fde047] sm:text-2xl">
+                Order Delivered!
+              </h2>
+              <span
+                data-testid="delivery-grade-badge"
+                className="font-pixel border border-[#6b4931] bg-[#120c0a] px-2 py-0.5 text-xs font-bold"
+                style={{ color: gradeMeta.color }}
+              >
+                Grade {summary.qualityGrade} · {gradeMeta.label}
+              </span>
+            </div>
+            <span className="font-pixel tabular-nums text-lg font-bold text-[#facc15]">
+              +{summary.goldEarned}g
             </span>
           </div>
-          <span className="font-pixel tabular-nums text-lg font-bold text-[#facc15]">
-            +{summary.goldEarned}g
-          </span>
-        </div>
 
-        <div className="flex flex-col items-center gap-3 border border-[#4a3222] bg-[#17100d] p-3 sm:flex-row sm:items-stretch">
-          <WeaponRevealStage
-            weapon={summary.order.weapon}
-            grade={summary.qualityGrade}
-            leveledUp={summary.leveledUp}
-          />
-          <div className="flex flex-1 flex-col justify-between gap-2">
-            <div>
-              <div className="font-pixel text-sm font-bold text-[#fffbeb]">
-                {summary.masterworkTrait && (
-                  <span className="mr-1.5 text-[#fbbf24]">[{summary.masterworkTrait}]</span>
-                )}
-                {wDef.name} · Level {summary.newLevel}
-                {summary.leveledUp && (
-                  <span className="ml-2 text-[#4ade80]">
-                    (UP from Lv {summary.oldLevel}!)
-                  </span>
-                )}
-              </div>
-              <div className="font-pixel tabular-nums text-xs text-[#d4b88c]">
-                Forging Quality: {Math.round(summary.quality * 100)}% · Level-Up Roll:{' '}
-                {Math.round(summary.levelUpChance * 100)}%
-              </div>
-              <div className="font-pixel mt-1.5 flex flex-wrap gap-2.5 text-xs tabular-nums text-[#93c5fd]">
-                <span>PWR +{summary.statDeltas.power}</span>
-                <span>EDGE +{summary.statDeltas.edge}</span>
-                <span>BAL +{summary.statDeltas.balance}</span>
-                <span>DUR +{summary.statDeltas.durability}</span>
-                {summary.statDeltas.arcane > 0 && (
-                  <span>ARC +{summary.statDeltas.arcane}</span>
-                )}
-              </div>
-            </div>
-
-            {summary.selectedMaterials && summary.selectedMaterials.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 border-t border-[#362419] pt-2">
-                <span className="font-pixel text-[10px] text-[#b89f7d]">Forged With:</span>
-                {summary.selectedMaterials.map((stack) => {
-                  const mat = MATERIAL_BY_ID[stack.materialId];
-                  if (!mat) return null;
-                  return (
-                    <span
-                      key={stack.materialId}
-                      className="font-pixel flex items-center gap-1 border border-[#4a3222] bg-[#120c0a] px-1.5 py-0.5 text-[10px]"
-                      style={{ color: RARITY_COLORS[mat.rarity] }}
-                    >
-                      <MaterialSprite materialId={mat.id} size={14} />
-                      <span>
-                        {mat.name} ×{stack.units}
-                      </span>
+          <div className="flex flex-col items-center gap-3 border border-[#4a3222] bg-[#17100d] p-3 sm:flex-row sm:items-stretch">
+            <WeaponRevealStage
+              weapon={summary.order.weapon}
+              grade={summary.qualityGrade}
+              leveledUp={summary.leveledUp}
+            />
+            <div className="flex flex-1 flex-col justify-between gap-2">
+              <div>
+                <div className="font-pixel text-sm font-bold text-[#fffbeb]">
+                  {summary.masterworkTrait && (
+                    <span className="mr-1.5 text-[#fbbf24]">[{summary.masterworkTrait}]</span>
+                  )}
+                  {wDef.name} · Level {summary.newLevel}
+                  {summary.leveledUp && (
+                    <span className="ml-2 text-[#4ade80]">
+                      (UP from Lv {summary.oldLevel}!)
                     </span>
-                  );
-                })}
+                  )}
+                </div>
+                <div className="font-pixel tabular-nums text-xs text-[#d4b88c]">
+                  {/* Truthful at the cap: production performs no Level-Up roll when the incoming level is already 20 or higher. */}
+                  Forging Quality: {Math.round(summary.quality * 100)}% ·{' '}
+                  {summary.oldLevel >= 20
+                    ? 'Level-Up: Maximum level (20)'
+                    : `Level-Up Roll: ${Math.round(summary.levelUpChance * 100)}%`}
+                </div>
+                <div className="font-pixel mt-1.5 flex flex-wrap gap-2.5 text-xs tabular-nums text-[#93c5fd]">
+                  <span>PWR +{summary.statDeltas.power}</span>
+                  <span>EDGE +{summary.statDeltas.edge}</span>
+                  <span>BAL +{summary.statDeltas.balance}</span>
+                  <span>DUR +{summary.statDeltas.durability}</span>
+                  {summary.statDeltas.arcane > 0 && (
+                    <span>ARC +{summary.statDeltas.arcane}</span>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-        </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border border-[#362419] bg-[#120c0a] px-3 py-2 font-pixel text-xs">
-          <span className="text-[#93c5fd]">
-            +{summary.xpEarned} Smith XP
-            {smithLeveled && (
-              <span className="ml-1.5 font-bold text-[#fde047]">
-                → Smith Lv {summary.smithLevelAfter}!
+              {summary.selectedMaterials && summary.selectedMaterials.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-[#362419] pt-2">
+                  <span className="font-pixel text-[10px] text-[#b89f7d]">Forged With:</span>
+                  {summary.selectedMaterials.map((stack) => {
+                    const mat = MATERIAL_BY_ID[stack.materialId];
+                    if (!mat) return null;
+                    return (
+                      <span
+                        key={stack.materialId}
+                        className="font-pixel flex items-center gap-1 border border-[#4a3222] bg-[#120c0a] px-1.5 py-0.5 text-[10px]"
+                        style={{ color: RARITY_COLORS[mat.rarity] }}
+                      >
+                        <MaterialSprite materialId={mat.id} size={14} />
+                        <span>
+                          {mat.name} ×{stack.units}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 border border-[#362419] bg-[#120c0a] px-3 py-2 font-pixel text-xs">
+            <span className="text-[#93c5fd]">
+              +{summary.xpEarned} Smith XP
+              {smithLeveled && (
+                <span className="ml-1.5 font-bold text-[#fde047]">
+                  → Smith Lv {summary.smithLevelAfter}!
+                </span>
+              )}
+            </span>
+            {summary.promptBonusGold > 0 && (
+              <span className="text-[#4ade80]">Prompt Tip +{summary.promptBonusGold}g</span>
+            )}
+            {summary.reputationPenalty < 0 && (
+              <span className="text-[#f87171]">
+                Flawed Work: {summary.reputationPenalty} Rep
               </span>
             )}
-          </span>
-          {summary.promptBonusGold > 0 && (
-            <span className="text-[#4ade80]">Prompt Tip +{summary.promptBonusGold}g</span>
-          )}
-          {summary.reputationPenalty < 0 && (
-            <span className="text-[#f87171]">
-              Flawed Work: {summary.reputationPenalty} Rep
-            </span>
-          )}
+          </div>
+
+          {(() => {
+            const reports = summary.stepReports;
+            const stepsList = summary.steps;
+            const hasSteps = Boolean(stepsList && stepsList.length > 0);
+            // V2 summaries (no step list, no reports) render no section.
+            if (!hasSteps && (!reports || !reports.some(Boolean))) return null;
+            const count = hasSteps ? stepsList!.length : reports!.length;
+            return (
+            <div
+              data-testid="forge-insight"
+              className="flex flex-col gap-2 border border-[#4a3222] bg-[#17100d] p-3"
+            >
+              <div className="font-pixel text-xs font-bold text-[#fde047]">
+                {STRINGS.delivery.insight.title}
+              </div>
+              <div className="font-pixel text-[10px] text-[#b89f7d]">
+                {STRINGS.delivery.insight.legend}
+              </div>
+              {Array.from({ length: count }, (_, stepIdx) => {
+                const report = reports?.[stepIdx];
+                return (
+                <div
+                  key={stepIdx}
+                  data-testid={`forge-insight-step-${stepIdx}`}
+                  className="flex flex-col gap-1 border-t border-[#362419] pt-1.5"
+                >
+                  {report ? (
+                    <>
+                      <div className="font-pixel flex flex-wrap items-baseline gap-x-2 text-xs font-bold text-[#fffbeb]">
+                        <span>
+                          {STRINGS.delivery.insight.stepLabel} {stepIdx + 1} ·{' '}
+                          {STRINGS.stations[report.station].title}
+                        </span>
+                        <span className="tabular-nums text-[#93c5fd]">
+                          {STRINGS.delivery.insight.labels.accuracy}:{' '}
+                          {Math.round(report.accuracy * 100)}%
+                        </span>
+                        <span className="text-[10px] font-normal text-[#4ade80]">
+                          ({STRINGS.delivery.insight.observedTag})
+                        </span>
+                      </div>
+                      <div className="font-pixel flex flex-wrap items-baseline gap-x-1 text-[10px] tabular-nums text-[#d4b88c]">
+                        <span>
+                          {STRINGS.delivery.insight.labels.bestStreak}: {report.bestStreak}
+                        </span>
+                        <span className="text-[#4ade80]">
+                          ({STRINGS.delivery.insight.observedTag})
+                        </span>
+                      </div>
+                      {report.entries.map((entry) => (
+                        <div
+                          key={entry.key}
+                          className="font-pixel flex flex-wrap items-baseline gap-x-1 text-[10px] text-[#d4b88c]"
+                        >
+                          <span className="tabular-nums">
+                            {STRINGS.delivery.insight.labels[entry.key] ?? entry.key}:{' '}
+                            {formatInsightEntryValue(entry)}
+                          </span>
+                          <span className={entry.derived ? 'text-[#b89f7d]' : 'text-[#4ade80]'}>
+                            (
+                            {entry.derived
+                              ? STRINGS.delivery.insight.derivedTag
+                              : STRINGS.delivery.insight.observedTag}
+                            )
+                          </span>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="font-pixel flex flex-wrap items-baseline gap-x-2 text-xs font-bold text-[#fffbeb]">
+                      <span>{missingStepTitle(summary, stepIdx)}</span>
+                      <span className="text-[10px] font-normal text-[#b89f7d]">
+                        ({STRINGS.delivery.insight.unavailable})
+                      </span>
+                    </div>
+                  )}
+                </div>
+                );
+              })}
+            </div>
+            );
+          })()}
+
+          <p className="font-pixel text-xs text-[#d4b88c]">
+            {summary.order.customerName} heads to {summary.order.scenarioName}. A
+            messenger will bring the Battle Report shortly!
+          </p>
+
+          <p className="font-pixel text-xs text-[#d4b88c]">
+            {STRINGS.delivery.acknowledgement}
+          </p>
+
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="forge-button-primary font-pixel w-full cursor-pointer py-3 text-sm font-bold"
+          >
+            {STRINGS.delivery.continueBtn}
+          </button>
         </div>
-
-        <p className="font-pixel text-xs text-[#d4b88c]">
-          {summary.order.customerName} heads to {summary.order.scenarioName}. A
-          messenger will bring the Battle Report shortly!
-        </p>
-
-        <button
-          type="button"
-          onClick={onConfirm}
-          className="forge-button-primary font-pixel w-full cursor-pointer py-3 text-sm font-bold"
-        >
-          Collect {summary.goldEarned}g & Return to Forge
-        </button>
+        {notification && (
+          <div data-testid="delivery-notification" className="pointer-events-none flex w-full shrink-0 justify-center">
+            {notification}
+          </div>
+        )}
       </div>
     </div>
   );

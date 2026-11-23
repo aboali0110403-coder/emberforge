@@ -4,7 +4,7 @@ import { getPortraitAsset, getWorkshopBgAsset } from '../gfx/generatedAssets';
 import { ParticlePool } from '../gfx/particles';
 import { getPlayerSpriteCanvas } from '../gfx/sprites';
 import type { EquipmentId, Order, PlayerCustomization } from '../types';
-import { computeWorkshopIdlePose } from './animation';
+import { computeWorkshopIdlePose, getWorkshopAtmosphereSpec } from './animation';
 
 export type WorkshopHotspotId =
   | 'furnace'
@@ -51,6 +51,8 @@ const TIER_METAL_COLORS = ['#544a47', '#788496', '#3b82f6', '#a855f7', '#f59e0b'
 const TIER_TRIM_COLORS = ['#3b2416', '#94a3b8', '#93c5fd', '#e9d5ff', '#fef08a'];
 
 export interface WorkshopRenderOptions {
+  // Undefined preserves the baseline title scene. Workshop supplies a RAF blend.
+  nightMix?: number;
   activeSpot?: WorkshopHotspotId | null;
   isWalking?: boolean;
   facing?: 1 | -1;
@@ -72,6 +74,7 @@ export function renderWorkshopScene(
   opts: WorkshopRenderOptions = {},
 ): void {
   const hasRichBg = Boolean(getLoadedSheet('workshopBg'));
+  const atmosphere = opts.nightMix === undefined ? null : getWorkshopAtmosphereSpec(opts.nightMix);
   const bg = getWorkshopBgAsset();
   ctx.drawImage(bg, 0, 0, 480, 270);
 
@@ -116,7 +119,7 @@ export function renderWorkshopScene(
     const fireSprite = getVfxSprite(`fire${fireIdx}` as 'fire0' | 'fire1' | 'fire2', 28, 36);
     if (fireSprite) {
       ctx.save();
-      ctx.globalAlpha = 0.72 + Math.sin(time * 12) * 0.16;
+      ctx.globalAlpha = 0.72 + Math.sin(time * 12) * 0.16 + (atmosphere?.flameBoost ?? 0);
       const fScale = 1 + (furnaceTier - 1) * 0.04;
       const fw = Math.round(28 * fScale);
       const fh = Math.round(36 * fScale);
@@ -178,11 +181,15 @@ export function renderWorkshopScene(
 
     // 6. Subtle pulsing candlelight over Shop Shelf
     const shelfGlow = ctx.createRadialGradient(426, 84, 4, 426, 84, 46);
-    shelfGlow.addColorStop(0, `rgba(251, 191, 36, ${0.14 + Math.sin(time * 6) * 0.03})`);
+    shelfGlow.addColorStop(0, `rgba(251, 191, 36, ${0.14 + Math.sin(time * 6) * 0.03 + (atmosphere?.shelfBoost ?? 0)})`);
     shelfGlow.addColorStop(1, 'rgba(251, 191, 36, 0)');
     ctx.fillStyle = shelfGlow;
     ctx.fillRect(378, 38, 96, 92);
   }
+
+  // Grade environment layers only. Characters, customer labels, reticles and
+  // particles are drawn afterwards so important details keep their contrast.
+  if (opts.nightMix !== undefined) drawWorkshopAmbient(ctx, opts.nightMix);
 
   // Warm Multi-Layered Hearth Light Cone across floor & anvil
   const hearthCenterX = hasRichBg ? 94 : 48;
@@ -196,8 +203,8 @@ export function renderWorkshopScene(
     hearthCenterY,
     165,
   );
-  grad.addColorStop(0, `rgba(255, 180, 56, ${flicker + 0.12})`);
-  grad.addColorStop(0.45, `rgba(234, 88, 12, ${flicker * 0.85})`);
+  grad.addColorStop(0, `rgba(255, 180, 56, ${flicker + 0.12 + (atmosphere?.hearthBoost ?? 0)})`);
+  grad.addColorStop(0.45, `rgba(234, 88, 12, ${flicker * 0.85 + (atmosphere?.hearthBoost ?? 0) * 0.6})`);
   grad.addColorStop(1, 'rgba(234, 88, 12, 0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 36, 265, 228);
@@ -206,7 +213,7 @@ export function renderWorkshopScene(
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   const floorLight = ctx.createRadialGradient(135, 206, 6, 135, 206, 95);
-  floorLight.addColorStop(0, `rgba(249, 115, 22, ${0.11 + Math.sin(time * 7) * 0.025})`);
+  floorLight.addColorStop(0, `rgba(249, 115, 22, ${0.11 + Math.sin(time * 7) * 0.025 + (atmosphere?.floorBoost ?? 0)})`);
   floorLight.addColorStop(1, 'rgba(249, 115, 22, 0)');
   ctx.fillStyle = floorLight;
   ctx.fillRect(36, 135, 200, 120);
@@ -395,6 +402,27 @@ export function renderWorkshopScene(
   }
 
   particles.draw(ctx);
+}
+
+// Reuse the existing 480x270 environment, without resampling, blur or new art.
+export function drawWorkshopAmbient(ctx: CanvasRenderingContext2D, nightMix: number): void {
+  const spec = getWorkshopAtmosphereSpec(nightMix);
+  ctx.save();
+  if (spec.ambientShade > 0) {
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = `rgba(18, 28, 52, ${spec.ambientShade})`;
+    ctx.fillRect(0, 0, 480, 270);
+  }
+  if (spec.daylight > 0) {
+    ctx.globalCompositeOperation = 'screen';
+    const daylight = ctx.createLinearGradient(450, 0, 150, 270);
+    daylight.addColorStop(0, `rgba(255, 218, 160, ${spec.daylight})`);
+    daylight.addColorStop(0.55, `rgba(255, 218, 160, ${spec.daylight * 0.35})`);
+    daylight.addColorStop(1, 'rgba(255, 218, 160, 0)');
+    ctx.fillStyle = daylight;
+    ctx.fillRect(0, 0, 480, 270);
+  }
+  ctx.restore();
 }
 
 function drawCornerReticle(

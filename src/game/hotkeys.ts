@@ -1,4 +1,9 @@
-import type { ActiveModal, AppScreen, ForgingSession } from '../types';
+import type {
+  ActiveModal,
+  AppScreen,
+  ForgingSession,
+} from '../types';
+import type { ForgeInsightReport } from './forgeInsightReport';
 
 export interface KeyActionContext {
   screen: AppScreen;
@@ -205,6 +210,7 @@ export function advanceForgeStep(
   session: ForgingSession,
   accuracy: number,
   bestStreak: number,
+  insight?: ForgeInsightReport,
 ): {
   finishedAll: boolean;
   nextSession: ForgingSession;
@@ -221,6 +227,17 @@ export function advanceForgeStep(
   nextCompleted[session.stepIndex] = true;
 
   const updatedBest = Math.max(session.bestStreakInForge, bestStreak);
+
+  // V3-1: carry the step's insight report (when the payload has one) at its
+  // own step index, so reports stay aligned with steps even when the player
+  // completes stations out of order or repeats a station in a royal recipe.
+  let nextReports = session.stepReports;
+  if (insight) {
+    nextReports = session.stepReports
+      ? [...session.stepReports]
+      : new Array<ForgeInsightReport | undefined>(len).fill(undefined);
+    nextReports[session.stepIndex] = insight;
+  }
 
   let nextIdx = -1;
   for (let offset = 1; offset < len; offset++) {
@@ -241,6 +258,7 @@ export function advanceForgeStep(
         stepAccuracies: nextAcc,
         completedSteps: nextCompleted,
         bestStreakInForge: updatedBest,
+        stepReports: nextReports,
       },
     };
   }
@@ -253,6 +271,7 @@ export function advanceForgeStep(
       stepAccuracies: nextAcc,
       completedSteps: nextCompleted,
       bestStreakInForge: updatedBest,
+      stepReports: nextReports,
     },
   };
 }
